@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "punchlist",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Only the API reaches the Worker; everything else is the static web board.
+    "run_worker_first": ["/v1/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "BOARD", "class_name": "BoardDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardDO"] }],
+  "vars": {
+    // "1" enables the dev identity stub (?as=nick|aaron|kevin), sample-data seeding and the
+    // simulated GitHub close. Set in .dev.vars for local dev; never in production.
+    "DEV_MODE": "0"
+  }
+}

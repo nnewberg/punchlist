@@ -1,0 +1,103 @@
+import { describe, expect, it } from 'vitest';
+import { applyOp, columnItems, inversePatch } from '../shared/ops';
+import type { Actor, Item, Op } from '../shared/types';
+
+const nick: Actor = { user: 'nick', via: 'web' };
+const aaron: Actor = { user: 'aaron', via: 'web' };
+
+function board() {
+  const items = new Map<string, Item>();
+  let n = 1;
+  let clock = 0;
+  const run = (op: Op, actor: Actor = nick) => {
+    const res = applyOp(items, op, { actor, now: new Date(Date.UTC(2026, 9, 16, 0, 0, clock++)).toISOString(), newId: `PL-${String(n).padStart(3, '0')}` });
+    if (res.ok && !res.noop) {
+      if (op.op === 'create') n++;
+      items.set(res.after.id, res.after);
+    }
+    return res;
+  };
+  return { items, run };
+}
+
+describe('applyOp', () => {
+  it('creates items at the top of their column', () => {
+    const b = board();
+    b.run({ op: 'create', title: 'first', status: 'up_next' });
+    b.run({ op: 'create', title: 'second', status: 'up_next' });
+    expect(columnItems(b.items.values(), 'up_next').map(i => i.title)).toEqual(['second', 'first']);
+  });
+
+  it('orders moves within a column by fractional rank', () => {
+    const b = board();
+    for (const t of ['c', 'b', 'a']) b.run({ op: 'create', title: t, status: 'up_next' });
+    // a, b, c → move c before a
+    b.run({ op: 'move', id: 'PL-001', status: 'up_next', beforeId: 'PL-003' });
+    expect(columnItems(b.items.values(), 'up_next').map(i => i.title)).toEqual(['c', 'a', 'b']);
+    // move c to the end
+    b.run({ op: 'move', id: 'PL-001', status: 'up_next', beforeId: null });
+    expect(columnItems(b.items.values(), 'up_next').map(i => i.title)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('claims for the mover when dropped into In Progress (FR-11) and releases back', () => {
+    const b = board();
+    b.run({ op: 'create', title: 'x', status: 'up_next' });
+    b.run({ op: 'move', id: 'PL-001', status: 'in_progress' }, aaron);
+    expect(b.items.get('PL-001')!.claim?.user).toBe('aaron');
+    b.run({ op: 'release', id: 'PL-001' }, aaron);
+    const it = b.items.get('PL-001')!;
+    expect(it.claim).toBeNull();
+    expect(it.status).toBe('up_next');
+  });
+
+  it('refuses a claim held by someone else unless stolen (FR-27)', () => {
+    const b = board();
+    b.run({ op: 'create', title: 'x' });
+    b.run({ op: 'claim', id: 'PL-001' }, aaron);
+    const res = b.run({ op: 'claim', id: 'PL-001' }, nick);
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.error.code).toBe('claimed');
+    const stolen = b.run({ op: 'claim', id: 'PL-001', steal: true }, nick);
+    expect(stolen.ok && !stolen.noop && stolen.meta.text).toBe('Took over from Aaron');
+    expect(b.items.get('PL-001')!.claim?.user).toBe('nick');
+  });
+
+  it('rejects a stale body edit with the other person’s text (FR-8)', () => {
+    const b = board();
+    b.run({ op: 'create', title: 'x' });
+    b.run({ op: 'edit', id: 'PL-001', body: 'aaron text', baseBodyVersion: 0 }, aaron);
+    const res = b.run({ op: 'edit', id: 'PL-001', body: 'nick text', baseBodyVersion: 0 }, nick);
+    expect(!res.ok && res.error).toMatchObject({ code: 'conflict', by: 'aaron', theirs: 'aaron text', version: 1 });
+    // Different fields still merge: a title change with no body goes through.
+    expect(b.run({ op: 'edit', id: 'PL-001', title: 'renamed' }, nick).ok).toBe(true);
+  });
+
+  it('reopens a closed item to the column it came from (S9)', () => {
+    const b = board();
+    b.run({ op: 'create', title: 'x', status: 'backlog' });
+    b.run({ op: 'move', id: 'PL-001', status: 'done' });
+    expect(b.items.get('PL-001')!.closed_at).toBeDefined();
+    b.run({ op: 'reopen', id: 'PL-001' });
+    const it = b.items.get('PL-001')!;
+    expect(it.status).toBe('backlog');
+    expect(it.closed_at).toBeUndefined();
+  });
+
+  it('builds an inverse patch that restores the earlier item', () => {
+    const b = board();
+    b.run({ op: 'create', title: 'x', status: 'backlog' });
+    const res = b.run({ op: 'move', id: 'PL-001', status: 'done' });
+    if (!res.ok || res.noop) throw new Error('move failed');
+    const patch = inversePatch(res.before!, res.after);
+    expect(patch).toMatchObject({ status: 'backlog', closed_at: undefined });
+    b.run({ op: 'restore', id: 'PL-001', fields: patch, undoOf: 2 });
+    expect(b.items.get('PL-001')!.status).toBe('backlog');
+    expect('closed_at' in b.items.get('PL-001')!).toBe(false);
+  });
+
+  it('treats no-change edits as no-ops', () => {
+    const b = board();
+    b.run({ op: 'create', title: 'x' });
+    expect(b.run({ op: 'edit', id: 'PL-001', title: 'x' })).toMatchObject({ ok: true, noop: true });
+  });
+});

@@ -1,0 +1,264 @@
+import { DurableObject } from 'cloudflare:workers';
+import { applyOp, columnItems, inversePatch } from '../shared/ops';
+import { person } from '../shared/config';
+import type { Actor, BoardEvent, BoardInfo, ClientMsg, EventMeta, Item, MyWorkBoard, Op, OpError, ServerMsg, Snapshot } from '../shared/types';
+import { buildSeed } from './seed';
+
+// One Durable Object per board (PRD §5.1). Every write goes through here, one at a time, so IDs never
+// collide and every client sees the same order. Follows the §8 cost rules: hibernatable WebSockets,
+// keepalives answered by auto-response, no timers and no outbound fetches.
+
+export type ApplyOutcome =
+  | { ok: true; event: BoardEvent; item: Item }
+  | { ok: true; noop: true; item: Item }
+  | { ok: false; error: OpError };
+
+/** Ops a client may send. `gh_close` and `restore` are produced by the service itself. */
+export const CLIENT_OPS = new Set<Op['op']>(['create', 'move', 'edit', 'claim', 'release', 'block', 'unblock', 'note', 'tag', 'depends', 'reopen', 'drop', 'undo']);
+
+interface SocketAttachment {
+  user: string;
+}
+
+interface EventRow extends Record<string, SqlStorageValue> {
+  seq: number;
+  ts: string;
+  item_id: string;
+  op: string;
+  actor: string;
+  before: string | null;
+  after: string | null;
+  meta: string | null;
+  undoable: number;
+}
+
+const RESYNC_AFTER = 500;
+
+export class BoardDO extends DurableObject<Env> {
+  private sql: SqlStorage;
+  private items = new Map<string, Item>();
+  private info: BoardInfo | null = null;
+  private seq = 0;
+  private nextNum = 1;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.sql = ctx.storage.sql;
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+    ctx.blockConcurrencyWhile(async () => this.load());
+  }
+
+  private load() {
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, status TEXT NOT NULL, json TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS events (
+      seq INTEGER PRIMARY KEY, ts TEXT NOT NULL, item_id TEXT NOT NULL, op TEXT NOT NULL, actor TEXT NOT NULL,
+      before TEXT, after TEXT, meta TEXT, undoable INTEGER NOT NULL DEFAULT 1)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS events_item ON events (item_id, seq)`);
+    const meta = new Map(this.sql.exec<{ k: string; v: string }>(`SELECT k, v FROM meta`).toArray().map(r => [r.k, r.v]));
+    if (meta.has('info')) this.info = JSON.parse(meta.get('info')!);
+    this.seq = Number(meta.get('seq') ?? 0);
+    this.nextNum = Number(meta.get('next_num') ?? 1);
+    for (const r of this.sql.exec<{ json: string }>(`SELECT json FROM items`)) {
+      const it = JSON.parse(r.json) as Item;
+      this.items.set(it.id, it);
+    }
+  }
+
+  private setMeta(k: string, v: string) {
+    this.sql.exec(`INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v`, k, v);
+  }
+
+  /** First touch creates the board; in dev an empty board is filled from the design's sample data. */
+  private ensure(info: BoardInfo) {
+    if (this.info) return;
+    this.ctx.storage.transactionSync(() => {
+      this.info = info;
+      this.setMeta('info', JSON.stringify(info));
+      const seed = this.env.DEV_MODE === '1' ? buildSeed(`${info.owner}/${info.repo}`) : null;
+      if (seed) {
+        for (const it of seed.items) this.writeItem(it);
+        for (const e of seed.events) {
+          this.seq += 1;
+          this.sql.exec(
+            `INSERT INTO events (seq, ts, item_id, op, actor, before, after, meta, undoable) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0)`,
+            this.seq, e.ts, e.item_id, e.op, JSON.stringify(e.actor), JSON.stringify(e.meta ?? {}),
+          );
+        }
+        const nums = seed.items.map(i => Number(/-(\d+)/.exec(i.id)?.[1] ?? 0));
+        this.nextNum = Math.max(0, ...nums) + 1;
+      }
+      this.setMeta('seq', String(this.seq));
+      this.setMeta('next_num', String(this.nextNum));
+    });
+  }
+
+  private writeItem(it: Item) {
+    this.items.set(it.id, it);
+    this.sql.exec(`INSERT INTO items (id, status, json) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET status = excluded.status, json = excluded.json`, it.id, it.status, JSON.stringify(it));
+  }
+
+  private rowToEvent(r: EventRow): BoardEvent {
+    return { seq: r.seq, ts: r.ts, actor: JSON.parse(r.actor), item_id: r.item_id, op: r.op as BoardEvent['op'], meta: r.meta ? JSON.parse(r.meta) : undefined, undoable: r.undoable === 1 };
+  }
+
+  // ---- RPC (called by the Worker) ----
+
+  snapshot(info: BoardInfo): Snapshot {
+    this.ensure(info);
+    return { board: this.info!, items: [...this.items.values()], seq: this.seq, viewers: this.viewers() };
+  }
+
+  history(info: BoardInfo, id: string): BoardEvent[] {
+    this.ensure(info);
+    return this.sql.exec<EventRow>(`SELECT * FROM events WHERE item_id = ? ORDER BY seq DESC LIMIT 200`, id).toArray().map(r => this.rowToEvent(r));
+  }
+
+  eventsSince(info: BoardInfo, since: number): { events: { event: BoardEvent; item: Item }[]; seq: number } | null {
+    this.ensure(info);
+    if (this.seq - since > RESYNC_AFTER) return null;
+    const rows = this.sql.exec<EventRow>(`SELECT * FROM events WHERE seq > ? ORDER BY seq`, since).toArray();
+    return {
+      seq: this.seq,
+      events: rows.flatMap(r => {
+        const item = this.items.get(r.item_id);
+        return item ? [{ event: this.rowToEvent(r), item }] : [];
+      }),
+    };
+  }
+
+  myWork(info: BoardInfo, user: string): MyWorkBoard {
+    this.ensure(info);
+    const all = [...this.items.values()];
+    const name = person(user).name.toLowerCase();
+    const mentions = (reason: string) => new RegExp(`\\b(${user}|${name})\\b`, 'i').test(reason);
+    return {
+      board: this.info!,
+      held: columnItems(all, 'in_progress').filter(i => i.claim?.user === user),
+      upNext: columnItems(all, 'up_next').slice(0, 3),
+      blockedOnMe: all.filter(i => i.blocked && i.status !== 'done' && i.status !== 'dropped' && mentions(i.blocked.reason)),
+    };
+  }
+
+  apply(info: BoardInfo, op: Op, actor: Actor, clientOpId?: string): ApplyOutcome {
+    this.ensure(info);
+    let outcome: ApplyOutcome;
+    this.ctx.storage.transactionSync(() => {
+      outcome = this.applyInner(op, actor);
+    });
+    outcome = outcome!;
+    if (outcome.ok && !('noop' in outcome)) this.broadcast({ type: 'event', event: outcome.event, item: outcome.item, ...(clientOpId ? { clientOpId } : {}) });
+    return outcome;
+  }
+
+  private applyInner(op: Op, actor: Actor): ApplyOutcome {
+    const now = new Date().toISOString();
+    let undid: string | undefined;
+    if (op.op === 'undo') {
+      const row = this.sql.exec<EventRow>(`SELECT * FROM events WHERE seq = ?`, op.seq).toArray()[0];
+      if (!row) return { ok: false, error: { code: 'not_found', message: `No event ${op.seq}` } };
+      if (!row.undoable || !row.after) return { ok: false, error: { code: 'invalid', message: 'That change can’t be undone' } };
+      const after = JSON.parse(row.after) as Item;
+      const fields: Partial<Item> = row.before ? inversePatch(JSON.parse(row.before) as Item, after) : { status: 'dropped', prev_status: after.status };
+      undid = (row.meta ? (JSON.parse(row.meta) as EventMeta).text : undefined) ?? row.op;
+      op = { op: 'restore', id: row.item_id, fields, undoOf: op.seq };
+    }
+    const newId = op.op === 'create' ? `${this.info!.prefix}-${String(this.nextNum).padStart(3, '0')}` : undefined;
+    const res = applyOp(this.items, op, { actor, now, newId });
+    if (!res.ok) return res;
+    if (res.noop) return { ok: true, noop: true, item: res.item };
+    if (op.op === 'create') {
+      this.nextNum += 1;
+      this.setMeta('next_num', String(this.nextNum));
+    }
+    const meta = undid ? { ...res.meta, text: `Undid “${undid}”` } : res.meta;
+    const event = this.appendEvent(op.op, actor, now, res.before, res.after, meta);
+    this.writeItem(res.after);
+    return { ok: true, event, item: res.after };
+  }
+
+  private appendEvent(op: Op['op'], actor: Actor, ts: string, before: Item | null, after: Item, meta: EventMeta): BoardEvent {
+    this.seq += 1;
+    this.sql.exec(
+      `INSERT INTO events (seq, ts, item_id, op, actor, before, after, meta, undoable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      this.seq, ts, after.id, op, JSON.stringify(actor), before ? JSON.stringify(before) : null, JSON.stringify(after), JSON.stringify(meta),
+    );
+    this.setMeta('seq', String(this.seq));
+    return { seq: this.seq, ts, actor, item_id: after.id, op, meta, undoable: true };
+  }
+
+  // ---- WebSockets (live updates FR-6, presence FR-14) ----
+
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
+    const info = JSON.parse(request.headers.get('X-Punch-Board')!) as BoardInfo;
+    const user = request.headers.get('X-Punch-User')!;
+    this.ensure(info);
+    const { 0: client, 1: server } = new WebSocketPair();
+    this.ctx.acceptWebSocket(server);
+    server.serializeAttachment({ user } satisfies SocketAttachment);
+    this.broadcast({ type: 'presence', viewers: this.viewers() });
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer) {
+    let msg: ClientMsg;
+    try {
+      msg = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+    } catch {
+      return;
+    }
+    const { user } = ws.deserializeAttachment() as SocketAttachment;
+    if (msg.type === 'op') {
+      if (!CLIENT_OPS.has(msg.op.op)) return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'invalid', message: 'Unsupported op' } });
+      const out = this.apply(this.info!, msg.op, { user, via: 'web' }, msg.clientOpId);
+      if (!out.ok) this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: out.error });
+      else if ('noop' in out) this.send(ws, { type: 'ack', clientOpId: msg.clientOpId });
+    } else if (msg.type === 'sync') {
+      const since = this.eventsSince(this.info!, msg.since);
+      this.send(ws, since ? { type: 'events', ...since } : { type: 'resync', snapshot: this.snapshot(this.info!) });
+    }
+  }
+
+  async webSocketClose(ws: WebSocket, code: number, reason: string) {
+    try {
+      ws.close(code, reason);
+    } catch {
+      // already closed
+    }
+    this.broadcast({ type: 'presence', viewers: this.viewers(ws) });
+  }
+
+  async webSocketError(ws: WebSocket) {
+    this.broadcast({ type: 'presence', viewers: this.viewers(ws) });
+  }
+
+  private viewers(exclude?: WebSocket): string[] {
+    const users = new Set<string>();
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws === exclude || ws.readyState !== WebSocket.OPEN) continue;
+      const att = ws.deserializeAttachment() as SocketAttachment | null;
+      if (att) users.add(att.user);
+    }
+    return [...users];
+  }
+
+  private send(ws: WebSocket, msg: ServerMsg) {
+    try {
+      ws.send(JSON.stringify(msg));
+    } catch {
+      // socket went away; presence catches up on close
+    }
+  }
+
+  private broadcast(msg: ServerMsg) {
+    const data = JSON.stringify(msg);
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.send(data);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
