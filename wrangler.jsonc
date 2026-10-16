@@ -32,7 +32,7 @@
     // reach both a personal account and an org, so installs anywhere else are ignored.
     "ALLOWED_OWNERS": "nnewberg,futureleisurefoundation",
     // The App's URL name on GitHub, for "Add a repo" (github.com/apps/<slug>/installations/new).
-    "GITHUB_APP_SLUG": "punchlist"
+    "GITHUB_APP_SLUG": "punchlist-board"
     // Secrets (wrangler secret put; locally in .dev.vars): GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY
     // (PKCS#8 PEM), GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_WEBHOOK_SECRET.
   }
