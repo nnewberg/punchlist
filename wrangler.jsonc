@@ -20,9 +20,7 @@
     {
       "binding": "DB",
       "database_name": "punchlist",
-      // Set when the production database is created (`wrangler d1 create punchlist`). Local dev and
-      // tests don't need it.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "7bb5d5e5-12d4-4a37-8e4e-e9c8ff1888d4",
       "migrations_dir": "migrations"
     }
   ],
