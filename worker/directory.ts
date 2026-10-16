@@ -75,6 +75,12 @@ export async function boardForUser(env: Env, user: User, owner: string, repo: st
   }, v => !!v.board);
 }
 
+/** The live board for a repo, by GitHub's repo id (webhooks name repos by id, so renames don't matter). */
+export async function boardByRepoId(env: Env, repoId: number): Promise<Board | null> {
+  const row = await env.DB.prepare(`SELECT ${BOARD_COLS} FROM boards WHERE repo_id = ? AND archived_at IS NULL`).bind(repoId).first<BoardRow>();
+  return row ? toBoard(row) : null;
+}
+
 export async function listBoards(env: Env): Promise<Board[]> {
   const { results } = await env.DB.prepare(`SELECT ${BOARD_COLS} FROM boards WHERE archived_at IS NULL ORDER BY owner, repo`).all<BoardRow>();
   return results.map(toBoard);

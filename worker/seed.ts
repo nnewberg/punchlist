@@ -16,6 +16,8 @@ interface SeedItem {
   deps?: string[];
   deferred?: boolean;
   done?: { sha: string; pr?: number; age: string; inferred?: number; message?: string };
+  /** A closing commit pushed to a branch, not merged yet (FR-31). */
+  pending?: { sha: string; branch: string; age: string; message?: string };
   notes?: (Who & { age: string; text: string; commit?: string })[];
   /** Newest first, as in the design. */
   activity?: (Who & { text: string; ref?: string; msg?: string; age: string })[];
@@ -70,7 +72,8 @@ const BT: SeedItem[] = [
     ] },
   { id: 'BT-021', title: 'Photo upload progress bar', status: 'in_progress', tags: ['ios'], claim: { user: 'nick', kind: 'branch', ref: 'bt-021-upload-progress', age: '1d' },
     body: 'Show determinate progress for uploads over 1 MB.',
-    activity: [{ who: 'github', text: 'Pushed', ref: '5c0a1d9', age: '4h' }, { who: 'nick', text: 'Created', age: '3d' }] },
+    pending: { sha: '5c0a1d9e4b7f2a6c8d3e1f0a9b8c7d6e5f4a3b2c', branch: 'bt-021-upload-progress', age: '4h', message: 'Determinate upload progress' },
+    activity: [{ who: 'github', text: 'Fix pending', ref: 'bt-021-upload-progress', msg: 'Determinate upload progress', age: '4h' }, { who: 'nick', text: 'Created', age: '3d' }] },
   { id: 'BT-033', title: 'Quiz progress nudge', status: 'done', tags: ['ios'], done: { sha: '64a1083', pr: 38, age: '2h' }, claim: { user: 'aaron', kind: 'branch', ref: 'bt-033-quiz-nudge' },
     activity: [{ who: 'github', text: 'Closed by', ref: 'PR #38', age: '2h' }, { who: 'aaron', text: 'Started on branch bt-033-quiz-nudge', age: '1d' }] },
   { id: 'BT-009', title: 'Retry failed photo uploads to R2', status: 'done', tags: ['ios', 'infra'], done: { sha: '4772d30', age: '3h', inferred: 0.86, message: 'retry R2 uploads with backoff' }, claim: { user: 'nick', kind: 'session', ref: '9d41' },
@@ -151,7 +154,9 @@ export function buildSeed(key: string, now = Date.now()): { items: Item[]; event
       claim: s.claim ? { user: s.claim.user, kind: s.claim.kind, ...(s.claim.ref ? { ref: s.claim.ref } : {}), since: ago(now, s.claim.age ?? (s.done ? bump(s.done.age) : '1d')) } : null,
       citations: s.done
         ? [{ kind: 'closes', commit: s.done.sha, ...(s.done.pr ? { pr: s.done.pr } : {}), branch: 'main', how: s.done.inferred ? 'inferred' : 'explicit', confidence: s.done.inferred ?? null, at: ago(now, s.done.age), ...(s.done.message ? { message: s.done.message } : {}) }]
-        : [],
+        : s.pending
+          ? [{ kind: 'pending', commit: s.pending.sha, branch: s.pending.branch, how: 'explicit', confidence: null, at: ago(now, s.pending.age), ...(s.pending.message ? { message: s.pending.message } : {}) }]
+          : [],
       notes: (s.notes ?? []).map(n => ({ at: ago(now, n.age), actor: n.who, via: n.agent ? 'claude' : 'web', ...(n.session ? { session: n.session } : {}), ...(n.commit ? { commit: n.commit } : {}), text: n.text })),
       body_version: 0,
       ...(s.status === 'done' ? { prev_status: 'in_progress' as const, closed_at: ago(now, s.done!.age) } : {}),

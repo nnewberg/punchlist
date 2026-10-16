@@ -1,5 +1,6 @@
 import { generateKeyBetween } from 'fractional-indexing';
-import { COLUMNS, type Actor, type EventMeta, type Item, type Op, type OpError, type Status } from './types';
+import { COLUMNS, type Actor, type Citation, type EventMeta, type Item, type Op, type OpError, type Status } from './types';
+import { shortSha } from './github';
 import { person } from './config';
 
 // Pure op application. The board Durable Object runs this authoritatively (FR-7); the web client
@@ -201,7 +202,7 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
     case 'note': {
       const text = op.text.trim();
       if (!text) return fail('invalid', 'Note is empty');
-      it.notes = [...it.notes, { at: now, actor: user, via: actor.via, ...(actor.session ? { session: actor.session } : {}), ...(op.commit ? { commit: op.commit } : {}), text }];
+      it.notes = [...it.notes, { at: now, actor: user, via: actor.via, ...(actor.session ? { session: actor.session } : {}), ...(op.commit ? { commit: op.commit } : {}), ...(op.pr ? { pr: op.pr } : {}), text }];
       meta = { text: 'Added a note' };
       break;
     }
@@ -244,15 +245,78 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
       meta = { text: 'Deleted' };
       break;
     }
-    case 'gh_close': {
-      it.citations = [
-        ...it.citations,
-        { kind: 'closes', commit: op.commit, ...(op.pr ? { pr: op.pr } : {}), branch: 'main', how: op.how ?? 'explicit', confidence: op.confidence ?? null, ...(op.author ? { author: op.author } : {}), at: now, ...(op.message ? { message: op.message } : {}) },
-      ];
-      if (!it.claim && op.author) it.claim = { user: op.author, kind: 'manual', since: now };
-      setStatus(it, 'done', now);
-      it.blocked = null;
-      meta = op.pr ? { text: 'Closed by', ref: `PR #${op.pr}`, ...(op.message ? { msg: op.message } : {}) } : { text: 'Closed by push', ref: op.commit, ...(op.message ? { msg: op.message } : {}) };
+    case 'cite': {
+      const c = op.citation;
+      const sameCommit = (x: Citation) => !!c.commit && x.commit === c.commit;
+      if (c.kind === 'pending') {
+        if (it.status === 'done' || it.status === 'dropped') return { ok: true, noop: true, item: cur };
+        // One pending fix per branch (or per PR, before its branch is known): a force-push replaces it.
+        const same = (x: Citation) => x.kind === 'pending' && (c.branch ? x.branch === c.branch : !!c.pr && x.pr === c.pr);
+        const prev = it.citations.find(same);
+        const next: Citation = { ...prev, ...c, pr: c.pr ?? prev?.pr, commit: c.commit ?? prev?.commit, branch: c.branch ?? prev?.branch, at: now };
+        for (const k of ['pr', 'commit', 'branch', 'message'] as const) if (next[k] === undefined) delete next[k];
+        if (prev && JSON.stringify({ ...prev, at: 0 }) === JSON.stringify({ ...next, at: 0 })) return { ok: true, noop: true, item: cur };
+        it.citations = [...it.citations.filter(x => !same(x)), next];
+        meta = { text: 'Fix pending', ref: c.pr ? `PR #${c.pr}` : c.branch, ...(c.message ? { msg: c.message } : {}) };
+        break;
+      }
+      // The same commit or PR seen twice (push and PR events both report a merge) counts once.
+      if (it.citations.some(x => x.kind === 'closes' && !x.reverted && (sameCommit(x) || (!!c.pr && x.pr === c.pr)))) {
+        return { ok: true, noop: true, item: cur };
+      }
+      const closing = it.status !== 'done' && it.status !== 'dropped';
+      // Once it's closed, a pending fix has landed or no longer matters.
+      it.citations = [...it.citations.filter(x => !(closing && x.kind === 'pending')), { ...c, at: now }];
+      if (closing) {
+        if (!it.claim && c.author) it.claim = { user: c.author, kind: 'manual', since: now };
+        setStatus(it, 'done', now);
+        it.blocked = null;
+      }
+      const ref = c.pr ? `PR #${c.pr}` : shortSha(c.commit);
+      meta = { text: closing ? (c.how === 'branch' ? 'Closed by merging its branch' : c.pr ? 'Closed by' : 'Closed by push') : 'Also fixed by', ref, ...(c.message ? { msg: c.message } : {}) };
+      break;
+    }
+    case 'link_pr': {
+      const shas = new Set(op.commits);
+      let changed = false;
+      it.citations = it.citations.map(x => (x.commit && shas.has(x.commit) && x.pr !== op.pr ? ((changed = true), { ...x, pr: op.pr }) : x));
+      it.notes = it.notes.map(n => (n.commit && shas.has(n.commit) && n.pr !== op.pr ? ((changed = true), { ...n, pr: op.pr }) : n));
+      if (!changed) return { ok: true, noop: true, item: cur };
+      meta = { text: 'Linked to', ref: `PR #${op.pr}` };
+      break;
+    }
+    case 'revert': {
+      const hit = (x: Citation) =>
+        x.kind === 'closes' && !x.reverted && ((!!x.commit && op.commits.some(s => x.commit!.startsWith(s) || s.startsWith(x.commit!))) || (!!x.pr && op.prs.includes(x.pr)));
+      if (!it.citations.some(hit)) return { ok: true, noop: true, item: cur };
+      it.citations = it.citations.map(x => (hit(x) ? { ...x, reverted: true } : x));
+      const stillClosed = it.citations.some(x => x.kind === 'closes' && !x.reverted);
+      const reopen = it.status === 'done' && !stillClosed;
+      it.notes = [...it.notes, { at: now, actor: user, via: actor.via, commit: op.by.commit, text: `Reverted in ${shortSha(op.by.commit)}${op.by.message ? `: ${op.by.message}` : ''}` }];
+      if (reopen) {
+        const to = it.prev_status === 'backlog' || it.prev_status === 'up_next' ? it.prev_status : 'up_next';
+        it.claim = null;
+        it.rank = rankFor(items.values(), to, 'top', it.id);
+        setStatus(it, to, now);
+      }
+      meta = { text: reopen ? 'Reopened by a revert' : 'Close reverted', ref: shortSha(op.by.commit), ...(op.by.message ? { msg: op.by.message } : {}) };
+      break;
+    }
+    case 'branch_end': {
+      const pending = it.citations.filter(x => x.kind === 'pending' && x.branch === op.branch);
+      const held = it.claim?.kind === 'branch' && it.claim.ref === op.branch && it.status !== 'done' && it.status !== 'dropped';
+      if (!pending.length && !held && !op.note) return { ok: true, noop: true, item: cur };
+      it.citations = it.citations.filter(x => !pending.includes(x));
+      if (held) {
+        it.claim = null;
+        if (it.status === 'in_progress') {
+          const to = returnColumn(it) === 'in_progress' ? 'up_next' : returnColumn(it);
+          it.rank = rankFor(items.values(), to, 'top', it.id);
+          setStatus(it, to, now);
+        }
+      }
+      if (op.note) it.notes = [...it.notes, { at: now, actor: user, via: actor.via, text: op.note }];
+      meta = { text: held ? 'Branch ended; released' : 'Branch ended', ref: op.branch };
       break;
     }
     case 'restore': {

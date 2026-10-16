@@ -14,7 +14,8 @@
     "cf-typegen": "wrangler types --strict-vars=false worker/worker-configuration.d.ts",
     "db:local": "wrangler d1 migrations apply DB --local",
     "build:cli": "node cli/build.mjs",
-    "test:cli": "vitest run --config cli/vitest.config.ts"
+    "test:cli": "vitest run --config cli/vitest.config.ts",
+    "acceptance": "npm run build:cli && node acceptance/run.mjs"
   },
   "dependencies": {
     "fractional-indexing": "^3.4.0",

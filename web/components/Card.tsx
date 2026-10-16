@@ -27,8 +27,10 @@ export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
   const deps = openDeps(item, items);
   const blocked = !!item.blocked || deps.length > 0;
   const note = latestNote(item);
-  const hasMeta = !!claim || blocked || !!note;
   const done = item.status === 'done';
+  // FR-13: a fix that exists but hasn't reached the default branch yet.
+  const pending = done ? undefined : item.citations.find(c => c.kind === 'pending');
+  const hasMeta = !!claim || blocked || !!note || !!pending;
 
   return (
     <div
@@ -78,6 +80,12 @@ export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
               <span className="badge-blocked" title={item.blocked?.reason ?? `waiting on ${deps.map(d => d.id).join(', ')}`}>
                 <span>⊘</span>
                 <b>Blocked</b>
+              </span>
+            )}
+            {pending && (
+              <span className="badge-pend" title={pending.message ?? 'A fix is waiting to merge'}>
+                <span>◐</span>
+                {pending.pr ? `fix in PR #${pending.pr}` : pending.branch === claim?.ref ? 'fix pending' : <>fix on <span className="mono">{pending.branch}</span></>}
               </span>
             )}
             {note && (

@@ -22,12 +22,18 @@ export interface Claim {
   heartbeat_at?: string;
 }
 
+/**
+ * A commit or PR that closes an item, or will once it merges (`pending`). Partial progress (`Refs:`)
+ * and bare mentions are notes, not citations. `how: 'branch'` is a close inferred from a merged branch
+ * named for the item (`bt-014-…`) that never said `Closes`.
+ */
 export interface Citation {
-  kind: 'closes' | 'pending' | 'refs';
+  kind: 'closes' | 'pending';
+  /** Full SHA; shown shortened. */
   commit?: string;
   pr?: number;
   branch?: string;
-  how: 'explicit' | 'inferred' | 'manual';
+  how: 'explicit' | 'inferred' | 'manual' | 'branch';
   confidence: number | null;
   author?: string;
   at: string;
@@ -41,6 +47,7 @@ export interface Note {
   via?: Via;
   session?: string;
   commit?: string;
+  pr?: number;
   text: string;
 }
 
@@ -77,14 +84,21 @@ export type Op =
   | { op: 'release'; id: string }
   | { op: 'block'; id: string; reason: string }
   | { op: 'unblock'; id: string }
-  | { op: 'note'; id: string; text: string; commit?: string }
+  | { op: 'note'; id: string; text: string; commit?: string; pr?: number }
   | { op: 'tag'; id: string; add?: string[]; remove?: string[] }
   | { op: 'depends'; id: string; add?: string[]; remove?: string[] }
   | { op: 'reopen'; id: string }
   | { op: 'drop'; id: string }
   | { op: 'undo'; seq: number }
-  /** Server-internal: a GitHub close (M4 will produce these from webhooks; dev uses it to simulate). */
-  | { op: 'gh_close'; id: string; commit: string; pr?: number; author?: string; message?: string; how?: Citation['how']; confidence?: number | null }
+  // Server-internal ops produced from GitHub events (FR-26–34); clients can't send these.
+  /** A closing citation moves the item to Done (or just adds the link if it's already closed); a pending one adds the badge. */
+  | { op: 'cite'; id: string; citation: Omit<Citation, 'at'> }
+  /** Attaches a merged PR's number to the citations and notes from its commits (FR-33). */
+  | { op: 'link_pr'; id: string; pr: number; commits: string[] }
+  /** A revert landed: closes from these commits (by SHA prefix) or this PR stop counting, and the item reopens if nothing else closes it. */
+  | { op: 'revert'; id: string; commits: string[]; prs: number[]; by: { commit: string; message?: string } }
+  /** A branch was merged or deleted: its claim ends and its pending citations go (FR-28). */
+  | { op: 'branch_end'; id: string; branch: string; note?: string }
   /** Server-internal: field restore produced by `undo`. */
   | { op: 'restore'; id: string; fields: Partial<Item>; undoOf: number };
 
