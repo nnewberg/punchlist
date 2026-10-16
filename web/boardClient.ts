@@ -7,7 +7,8 @@ import { api, boardApi, wsUrl } from './api';
 // Object has acknowledged, and pending local ops are re-applied on top of it with the same pure
 // `applyOp` the server runs, so changes show instantly and roll back if the server rejects them.
 
-export type OpResult = { ok: true } | { ok: false; error: OpError };
+/** `seq` is the event the op became, when it changed anything. */
+export type OpResult = { ok: true; seq?: number } | { ok: false; error: OpError };
 export type Conn = 'connecting' | 'live' | 'offline';
 
 interface Pending {
@@ -152,7 +153,7 @@ export class BoardClient {
     this.confirmed.set(item.id, item);
     this.seq = Math.max(this.seq, event.seq);
     const mine = clientOpId ? this.takePending(clientOpId) : undefined;
-    mine?.resolve({ ok: true });
+    mine?.resolve({ ok: true, seq: event.seq });
     this.recompute();
     this.onEvent?.(event);
     if (!mine) this.onRemote?.({ event, item, prev });

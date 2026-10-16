@@ -34,6 +34,11 @@ export const ChevronIcon = () => (
 export const CloseIcon = () => (
   <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" fill="none" style={{ strokeWidth: 1.5, strokeLinecap: 'round' }}><path d="M2 2l8 8M10 2l-8 8" /></svg>
 );
+export const TrashIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" style={{ strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+    <path d="M2 3.5h10M5.5 3.5V2.2c0-.4.3-.7.7-.7h1.6c.4 0 .7.3.7.7v1.3M3.3 3.5l.6 8.3c0 .5.5.9 1 .9h4.2c.5 0 .9-.4 1-.9l.6-8.3M5.8 6v4.2M8.2 6v4.2" />
+  </svg>
+);
 export const BranchIcon = () => (
   <svg width="10" height="12" viewBox="0 0 10 12" fill="none" stroke="currentColor" style={{ strokeWidth: 1.3, flex: 'none' }}>
     <circle cx="2.5" cy="2.5" r="1.5" /><circle cx="2.5" cy="9.5" r="1.5" /><circle cx="7.5" cy="4" r="1.5" /><path d="M2.5 4v4M7.5 5.5c0 2-5 1.5-5 2.5" />

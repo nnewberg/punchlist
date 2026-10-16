@@ -106,7 +106,7 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
     sources: [...new Set(all.map(i => i.source.kind))].sort(),
   }), [all]);
 
-  const columns = useMemo(() => [...COLUMNS, ...(filters.dropped ? [{ key: 'dropped' as const, title: 'Dropped' }] : [])], [filters.dropped]);
+  const columns = useMemo(() => [...COLUMNS, ...(filters.dropped ? [{ key: 'dropped' as const, title: 'Deleted' }] : [])], [filters.dropped]);
   // What each column shows, top to bottom. Done holds only the last two weeks unless expanded.
   const lists = useMemo(() => new Map(columns.map(col => {
     let list = columnItems(visible, col.key);
@@ -216,7 +216,16 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
       )}
       {conn === 'offline' && <div className="status-line"><span className="d" />Reconnecting…</div>}
       {openItem && (
-        <DetailSheet key={openItem.id} item={openItem} items={items} board={board} client={client} onClose={() => setOpen(null)} onOpen={id => setOpen(id)} />
+        <DetailSheet
+          key={openItem.id}
+          item={openItem}
+          items={items}
+          board={board}
+          client={client}
+          onClose={() => setOpen(null)}
+          onOpen={id => setOpen(id)}
+          onDeleted={(id, seq) => setToast({ key: seq, user: me, text: `Deleted ${id}`, undoSeq: seq })}
+        />
       )}
       {toast && (
         <Toast

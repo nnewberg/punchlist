@@ -121,7 +121,7 @@ export function FilterMenu({ filters, onChange, tags, holders, sources }: { filt
           {group('Source', 'sources', sources)}
           <div className="menu-label">Status</div>
           <div className="chips">
-            <button className="chip" aria-pressed={filters.dropped} onClick={() => onChange({ ...filters, dropped: !filters.dropped })}>Show dropped</button>
+            <button className="chip" aria-pressed={filters.dropped} onClick={() => onChange({ ...filters, dropped: !filters.dropped })}>Show deleted</button>
           </div>
           {n > 0 && (
             <>
