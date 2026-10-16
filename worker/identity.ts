@@ -1,7 +1,9 @@
 import { sessionUser } from './auth';
 import { userByLogin, type User } from './directory';
+import { tokenUser } from './tokens';
 
-// Who's asking. Normally the GitHub sign-in session (auth.ts). In DEV_MODE a tab can also pick a
+// Who's asking: an API token (`Authorization: Bearer pl_…`, from `punch login`), else the GitHub
+// sign-in session cookie (auth.ts). A bad token is a 401, not a fall-through. In DEV_MODE a tab can also pick a
 // sample person with `?as=<login>` (sent as a header on fetch, a query param on the WebSocket), so two
 // tabs can be two people; with neither, dev mode signs you in as nick.
 
@@ -9,9 +11,17 @@ export interface Identity {
   user: User;
   /** A renewed session cookie to send back, when the session was just extended. */
   setCookie?: string;
+  /** Set when the request carried an API token rather than a cookie. */
+  tokenId?: string;
 }
 
 export async function resolveUser(request: Request, env: Env): Promise<Identity | null> {
+  const auth = request.headers.get('authorization');
+  if (auth) {
+    const t = /^Bearer\s+(\S+)$/i.exec(auth);
+    const hit = t ? await tokenUser(env, t[1]!) : null;
+    return hit ? { user: hit.user, tokenId: hit.tokenId } : null;
+  }
   if (env.DEV_MODE !== '1') return sessionUser(request, env);
   const asked = request.headers.get('X-Punch-Dev-User') ?? new URL(request.url).searchParams.get('as');
   const stub = asked ? await userByLogin(env, asked) : null;

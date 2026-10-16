@@ -1,9 +1,10 @@
-import type { Me, Op } from '../shared/types';
+import type { Actor, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
 import { BoardDO, CLIENT_OPS } from './board';
 import { boardInfo, boardsFor, ensureDevSeed, findBoard, handleWebhook, peopleOn, reconcile, reconcileSoon, roleFor, type Board, type User } from './directory';
 import { githubConfigured, verifyWebhook } from './github';
-import { resolveUser } from './identity';
+import { resolveUser, type Identity } from './identity';
+import { listTokens, revokeToken } from './tokens';
 
 export { BoardDO };
 
@@ -31,7 +32,7 @@ export default {
     await ensureDevSeed(env);
     const who = await resolveUser(request, env);
     if (!who) return json({ error: 'unauthenticated' }, 401);
-    const res = await api(request, env, ctx, who.user, parts, url);
+    const res = await api(request, env, ctx, who, parts, url);
     if (!who.setCookie || res.status === 101) return res;
     const renewed = new Response(res.body, res);
     renewed.headers.append('set-cookie', who.setCookie);
@@ -39,7 +40,17 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-async function api(request: Request, env: Env, ctx: ExecutionContext, user: User, parts: string[], url: URL): Promise<Response> {
+/** Who did it, and through what (FR-4): the CLI says `cli`, or `claude` with the agent's session. */
+function actorFor(request: Request, user: User): Actor {
+  const via = request.headers.get('X-Punch-Via');
+  const session = request.headers.get('X-Punch-Session')?.replace(/[^\w.:-]/g, '').slice(0, 64);
+  return { user: user.login, via: via === 'cli' || via === 'claude' ? via : 'web', ...(session ? { session } : {}) };
+}
+
+async function api(request: Request, env: Env, ctx: ExecutionContext, who: Identity, parts: string[], url: URL): Promise<Response> {
+  const { user } = who;
+  // Cookies need a same-origin check against CSRF; a Bearer token can't be sent by another site.
+  const trusted = !!who.tokenId || sameOrigin(request);
   // GET /v1/me: who I am, my boards and my role on each, and the people on them.
   if (parts[1] === 'me' && parts.length === 2) {
     const sync = reconcileSoon(env);
@@ -54,6 +65,18 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, user: User
       installUrl: installUrl(env),
       dev: env.DEV_MODE === '1',
     } satisfies Me);
+  }
+
+  // /v1/me/tokens: this person's CLI tokens, to list and revoke (FR-3). `current` is the one asking.
+  if (parts[1] === 'me' && parts[2] === 'tokens') {
+    if (parts.length === 3 && request.method === 'GET') {
+      return json({ tokens: (await listTokens(env, user.id)).map(t => ({ ...t, current: t.id === who.tokenId })) });
+    }
+    if (parts.length === 4 && request.method === 'DELETE') {
+      if (!trusted) return json({ error: 'forbidden' }, 403);
+      const id = parts[3] === 'current' ? who.tokenId : parts[3];
+      return id && (await revokeToken(env, user.id, id)) ? new Response(null, { status: 204 }) : notFound();
+    }
   }
 
   // GET /v1/me/work: My work across boards (FR-35); reads each board live.
@@ -77,7 +100,7 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, user: User
 
     if (rest[0] === 'ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return json({ error: 'expected websocket' }, 426);
-      if (!sameOrigin(request)) return json({ error: 'forbidden' }, 403);
+      if (!trusted) return json({ error: 'forbidden' }, 403);
       const headers = new Headers(request.headers);
       headers.set('X-Punch-Board', JSON.stringify(info));
       headers.set('X-Punch-User', user.login);
@@ -85,14 +108,25 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, user: User
       return stub.fetch(new Request(request.url, { headers }));
     }
 
+    // POST an op, or an array of ops applied in order that stops at the first one refused.
     if (rest[0] === 'ops' && request.method === 'POST') {
-      if (!sameOrigin(request)) return json({ error: 'forbidden' }, 403);
+      if (!trusted) return json({ error: 'forbidden' }, 403);
       if (role !== 'edit') return forbidden(readOnly);
-      const op = (await request.json()) as Op;
-      if (!op || !CLIENT_OPS.has(op.op)) return json({ ok: false, error: { code: 'invalid', message: 'Unsupported op' } }, 400);
-      const via = request.headers.get('X-Punch-Via') === 'cli' ? 'cli' : 'web';
-      const out = await stub.apply(info, op, { user: user.login, via });
-      return out.ok ? json(out) : json(out, out.error.code === 'not_found' ? 404 : 409);
+      const body = (await request.json().catch(() => null)) as Op | Op[] | null;
+      const ops = Array.isArray(body) ? body : body ? [body] : [];
+      if (!ops.length || ops.length > 50 || ops.some(op => !op || !CLIENT_OPS.has(op.op))) {
+        return json({ ok: false, error: { code: 'invalid', message: 'Unsupported op' } }, 400);
+      }
+      const actor = actorFor(request, user);
+      const results = [];
+      for (const op of ops) {
+        const out = await stub.apply(info, op, actor);
+        results.push(out);
+        if (!out.ok) break;
+      }
+      const last = results[results.length - 1]!;
+      const status = last.ok ? 200 : last.error.code === 'not_found' ? 404 : 409;
+      return json(Array.isArray(body) ? { ok: last.ok, results } : last, status);
     }
 
     if (rest[0] === 'events' && request.method === 'GET') {
