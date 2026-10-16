@@ -446,7 +446,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 | **M2 Web board** | FR-10–16 | Two browsers stay in sync live, with drag, edit, presence, history and undo | **Built and live** |
 | **M3 Claude plugin** | Skill, commands, hooks, claims, onboarding (FR-21–28) | S1, S2, S4 and S10 work across two machines, and a teammate goes from a fresh clone to a working plugin with one command | **Built** (FR-21–24, FR-25a, session claims with heartbeat and lapse). S1, S2, S4 and S10 pass on production as `claude -p` runs (2026-10-16), with a second session of Nick's playing the other person. `punch` 0.2.0 is on npm, and the plugin installs it on first use. The repo is public, so teammates can install the plugin. Still to do: a second GitHub account for a true two-person run, and onboarding Aaron and Kevin |
 | **M4 GitHub auto-close** | Webhooks, explicit closes, pending-on-branch, PR links, reverts, inferred closes (FR-29–34) | S5–S9 work on a real repo | **Deterministic sync built** (FR-26 branch claims, FR-29–31, FR-33, FR-34), with acceptance tests against `nnewberg/punchlist-sandbox`; S4, S5 (squash, merge and rebase), S6, S8 and S9 pass on production (2026-10-16). Inferred closes (FR-32) are step 3 of §9.1 |
-| **M5 Migrate and dogfood** | Imports (FR-36–39), My work (FR-35) | Both repos are imported, Aaron and Kevin are onboarded, and the §10 metrics are tracked | My work is built; the imports are not |
+| **M5 Migrate and dogfood** | Imports (FR-36–39), My work (FR-35) | Both repos are imported, Aaron and Kevin are onboarded, and the §10 metrics are tracked | My work and `punch import` are built. big-talk is imported (2026-10-16, 60 items); bulletin-bee is not. Retiring big-talk's old status copies (FR-39) is the team's call, after Nick tries the plugin there |
 
 ### 9.1 Build order from here (revised 2026-10-16)
 Automated syncing comes **before** any import. An imported board without auto-close starts drifting on day one, which is exactly what success criterion 3 rules out. It would also make Aaron's real board the first place auto-close is ever tested.
@@ -573,4 +573,14 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - **Item source.** Clients may set an item's `source` only to `chat`, `claude-deferred` or `cli`.
 - **Sign-in from a session.** `punch login --start` prints the code, and `punch login --finish` waits for it, because Claude can't show output from a command that's still running.
 - **Acceptance.** `acceptance/plugin.mjs` runs headless `claude -p --plugin-dir` sessions in a sandbox clone, using Sonnet, at about a dollar a run. A `-p` session ends, and so releases its claims, as soon as it answers. So "someone is working on it right now" is set up as a live claim made directly with `punch`, under another session.
+
+**Import: big-talk (2026-10-16)**
+- **What went on the board (60 items):**
+  - the 35 tickets, plus BT-007a (now BT-036, with its old ID as an alias)
+  - 16 open `docs/TODO.md` items, two of which turned out to be done
+  - TODO.md's 8-item Done log
+- **Where they landed:** 20 in Up Next, 24 in Backlog, 16 Done. Nick reviewed the dry run before anything was written.
+- **Status from git, not the ticket text.** Code merged to `main` counts as Done, with its commit linked, even when the ticket said "not started" (BT-008) or "not deployed" (BT-033, decided with Nick). What the ticket said is kept as a note. Partly built work stays open, with a note on what's done.
+- **Where the translation lives.** It's a one-off script, and it is not in this repo: this repo is public, and big-talk's content belongs to the org.
+- **Load time.** The import added about 380 KB of ticket text to the board. `punch list --compact` still takes about 0.45 s.
 
