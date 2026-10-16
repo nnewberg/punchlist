@@ -34,7 +34,9 @@ function describe(status: number, data: unknown, board?: BoardRef): string {
   const err = (data as { error?: unknown; results?: { ok: boolean; error?: OpError }[] } | null) ?? {};
   const opError = err.results?.find(r => !r.ok)?.error ?? (typeof err.error === 'object' ? (err.error as OpError) : undefined);
   if (opError) {
-    return opError.code === 'claimed' ? `${opError.message} (use --steal to take it over)` : opError.message;
+    if (opError.code === 'claimed') return `${opError.message} (use --steal to take it over)`;
+    if (opError.code === 'conflict') return `${opError.message} Nothing was saved: see their version with \`punch show\`, then edit again.`;
+    return opError.message;
   }
   const errors = (data as { errors?: string[] } | null)?.errors;
   if (errors?.length) return errors.join('\n');

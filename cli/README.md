@@ -14,6 +14,7 @@ punch list --compact   # the board for this repo, found from `origin`
 | `list [--compact] [--status s] [--mine] [--all]` | the board; `--compact` is the agent view |
 | `show ID` | one item, with notes and history |
 | `add "title" [-b body] [-s status] [-t tag] [--deferred]` | add an item; `--deferred` marks work Claude left for later |
+| `edit ID [--title "title"] [-b body \| --body-file path]` | retitle it or replace its description (`--body-file -` reads stdin). If someone changed the description since you read it, nothing is saved and you're told who |
 | `search "words"` | the closest items, including Done in the last 30 days (the duplicate check) |
 | `move ID status [--top \| --before ID]` | move it |
 | `start ID [--steal]` / `release ID` | claim it, or give it back |

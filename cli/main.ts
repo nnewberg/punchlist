@@ -9,6 +9,7 @@ import type { BoardEvent, Column, ImportFile, Me, MyWorkBoard, Op } from '../sha
 import { ApiError, boardPath, Client, flush, NetworkError, readBoard, write, type ApplyResult, type FlushReport } from './api';
 import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
 import { c, formatCompact, formatImportPlan, formatList, formatMine, formatShow } from './format';
+import { bodyFromFile, editOp } from './edit';
 import { applyInit, planInit, pluginSettings } from './init';
 import { readHookInput, runHook } from './hooks';
 import { searchItems } from './search';
@@ -25,6 +26,7 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
   list [--compact] [--status s] [--mine] [--all]   the board (--compact: the agent view)
   show ID                       one item, with notes and history
   add "title" [-b body] [-s status] [-t tag]... [--deferred]   add an item (default: Backlog)
+  edit ID [--title "title"] [-b body | --body-file path]       retitle it or replace its description (--body-file -: stdin)
   search "words"                the closest items, Done ones from the last 30 days too
   move ID status [--top | --before ID]             move it (backlog, next, progress, done)
   start ID [--steal]            claim it and move it to In Progress
@@ -60,6 +62,8 @@ const { values: o, positionals } = (() => {
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
         body: { type: 'string', short: 'b' },
+        'body-file': { type: 'string' },
+        title: { type: 'string' },
         status: { type: 'string', short: 's' },
         tag: { type: 'string', short: 't', multiple: true },
         top: { type: 'boolean' },
@@ -284,6 +288,25 @@ async function run() {
       if (status === 'dropped') throw new UsageError('New items can’t start deleted.');
       const op: Op = { op: 'create', title, status: status as Column, ...(o.body ? { body: o.body } : {}), ...(o.tag?.length ? { tags: o.tag } : {}), ...(o.deferred ? { source: 'claude-deferred' as const } : {}) };
       return change(`add "${title}"`, [op], said('Added'));
+    }
+
+    case 'edit': {
+      const ref = need(args[0], 'an item ID');
+      if (args.length > 1) throw new UsageError('Put the new text in --title or --body, for example: punch edit BT-014 --title "Rate-limit the invite endpoint"');
+      const file = o['body-file'];
+      if (file !== undefined && o.body !== undefined) throw new UsageError('Use --body or --body-file, not both.');
+      const body = file !== undefined ? bodyFromFile(readFileSync(file === '-' ? 0 : file, 'utf8')) : o.body;
+      if (o.title === undefined && body === undefined) throw new UsageError('Nothing to change: give --title, --body or --body-file.');
+      const b = board();
+      const api = await client();
+      reportFlush(await flush(api, b));
+      const { snapshot } = await readBoard(api, b);
+      const it = resolveId(new Map(snapshot.items.map(i => [i.id, i])), ref);
+      if (!it) throw new Error(`No item ${ref} on ${b.owner}/${b.repo}.`);
+      const op = editOp(it, { ...(o.title !== undefined ? { title: o.title } : {}), ...(body !== undefined ? { body } : {}) });
+      if (!op) return o.json ? printJson({ ok: true, noop: true, item: it }) : print(c.dim(`${it.id} already says that: nothing changed.`));
+      const what = op.title !== undefined ? (op.body !== undefined ? 'the title and description' : 'the title') : 'the description';
+      return change(`edit ${it.id}`, [op], r => `Edited ${what} of ${c.bold(lastItem(r).id)} ${lastItem(r).title}`);
     }
 
     case 'search':
