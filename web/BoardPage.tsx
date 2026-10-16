@@ -12,11 +12,11 @@ import { Toast, type ToastData } from './components/Toast';
 import { Glyph, PlusIcon } from './components/ui';
 import { DragFloat, Flip, useCardDrag, type Slot } from './drag';
 
-const COLUMNS: { key: Status; title: string; sub?: string }[] = [
+const COLUMNS: { key: Status; title: string }[] = [
   { key: 'backlog', title: 'Backlog' },
   { key: 'up_next', title: 'Up Next' },
   { key: 'in_progress', title: 'In Progress' },
-  { key: 'done', title: 'Done', sub: 'recent' },
+  { key: 'done', title: 'Done' },
 ];
 
 const ARRIVE_MS = 6500;
@@ -175,7 +175,6 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
                 <Glyph status={col.key} />
                 <span className="title">{col.title}</span>
                 <span className="count">{list.length}</span>
-                {col.sub && <span className="sub">{col.sub}</span>}
                 {isCol && <button className="icon-btn end" aria-label={`Add to ${col.title}`} onClick={() => setComposer(col.key as ColumnKey)}><PlusIcon /></button>}
               </div>
               <div className="col-body">
