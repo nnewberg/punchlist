@@ -1,7 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { applyOp, columnItems, inversePatch } from '../shared/ops';
-import { person } from '../shared/config';
-import type { Actor, BoardEvent, BoardInfo, ClientMsg, EventMeta, Item, MyWorkBoard, Op, OpError, ServerMsg, Snapshot } from '../shared/types';
+import type { Actor, BoardEvent, BoardInfo, ClientMsg, EventMeta, Item, MyWorkBoard, Op, OpError, Role, ServerMsg, Snapshot } from '../shared/types';
 import { buildSeed } from './seed';
 
 // One Durable Object per board (PRD §5.1). Every write goes through here, one at a time, so IDs never
@@ -18,6 +17,8 @@ export const CLIENT_OPS = new Set<Op['op']>(['create', 'move', 'edit', 'claim', 
 
 interface SocketAttachment {
   user: string;
+  /** Checked by the Worker when the socket opened; a viewer's socket can't change the board. */
+  role: Role;
 }
 
 interface EventRow extends Record<string, SqlStorageValue> {
@@ -71,7 +72,14 @@ export class BoardDO extends DurableObject<Env> {
 
   /** First touch creates the board; in dev an empty board is filled from the design's sample data. */
   private ensure(info: BoardInfo) {
-    if (this.info) return;
+    if (this.info) {
+      // The repo was renamed or transferred; the board (and its prefix) stays the same.
+      if (this.info.owner !== info.owner || this.info.repo !== info.repo) {
+        this.info = { ...this.info, owner: info.owner, repo: info.repo };
+        this.setMeta('info', JSON.stringify(this.info));
+      }
+      return;
+    }
     this.ctx.storage.transactionSync(() => {
       this.info = info;
       this.setMeta('info', JSON.stringify(info));
@@ -127,11 +135,12 @@ export class BoardDO extends DurableObject<Env> {
     };
   }
 
-  myWork(info: BoardInfo, user: string): MyWorkBoard {
+  myWork(info: BoardInfo, user: string, displayName: string): MyWorkBoard {
     this.ensure(info);
     const all = [...this.items.values()];
-    const name = person(user).name.toLowerCase();
-    const mentions = (reason: string) => new RegExp(`\\b(${user}|${name})\\b`, 'i').test(reason);
+    const name = displayName.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '');
+    const names = [...new Set([user, name, name.split(' ')[0]].filter(Boolean))].join('|');
+    const mentions = (reason: string) => new RegExp(`\\b(${names})\\b`, 'i').test(reason);
     return {
       board: this.info!,
       held: columnItems(all, 'in_progress').filter(i => i.claim?.user === user),
@@ -193,10 +202,11 @@ export class BoardDO extends DurableObject<Env> {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
     const info = JSON.parse(request.headers.get('X-Punch-Board')!) as BoardInfo;
     const user = request.headers.get('X-Punch-User')!;
+    const role = (request.headers.get('X-Punch-Role') ?? 'view') as Role;
     this.ensure(info);
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ user } satisfies SocketAttachment);
+    server.serializeAttachment({ user, role } satisfies SocketAttachment);
     this.broadcast({ type: 'presence', viewers: this.viewers() });
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -208,8 +218,9 @@ export class BoardDO extends DurableObject<Env> {
     } catch {
       return;
     }
-    const { user } = ws.deserializeAttachment() as SocketAttachment;
+    const { user, role } = ws.deserializeAttachment() as SocketAttachment;
     if (msg.type === 'op') {
+      if (role !== 'edit') return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'forbidden', message: 'You can view this board but not change it.' } });
       if (!CLIENT_OPS.has(msg.op.op)) return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'invalid', message: 'Unsupported op' } });
       const out = this.apply(this.info!, msg.op, { user, via: 'web' }, msg.clientOpId);
       if (!out.ok) this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: out.error });

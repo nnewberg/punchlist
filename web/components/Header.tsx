@@ -1,12 +1,12 @@
 import { useCallback, useState, type ReactNode, type RefObject } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { BoardInfo } from '../../shared/types';
-import { boardPath } from '../api';
+import type { BoardEntry, BoardInfo } from '../../shared/types';
+import { account, boardPath, signOut } from '../api';
 import { Avatar, ChevronIcon, FilterIcon, Logo, PlusIcon, SearchIcon, useDismiss } from './ui';
 
 export function Header({ title, board, boards, viewers, me, query, onQuery, searchRef, filter, onNew }: {
   title?: ReactNode;
-  board?: BoardInfo;
+  board?: BoardInfo & { role?: BoardEntry['role'] };
   boards: BoardInfo[];
   viewers?: string[];
   me: string;
@@ -23,16 +23,15 @@ export function Header({ title, board, boards, viewers, me, query, onQuery, sear
         <span className="wordmark">Punchlist</span>
       </Link>
       {board ? <BoardSwitcher board={board} boards={boards} /> : <span className="hdr-title">{title}</span>}
+      {board?.role === 'view' && <span className="badge-ro" title="You have read access to this repo, so you can see the board but not change it">View only</span>}
       <div className="spacer" />
-      {viewers ? (
+      {viewers && (
         <>
           <div className="viewers" title="Viewing now">
             {viewers.map(v => <Avatar key={v} user={v} />)}
           </div>
           <div className="vdivider" />
         </>
-      ) : (
-        <Avatar user={me} size={24} />
       )}
       <label className="search">
         <SearchIcon />
@@ -44,6 +43,32 @@ export function Header({ title, board, boards, viewers, me, query, onQuery, sear
           <PlusIcon />
           <span className="lbl">New item</span>
         </button>
+      )}
+      <AccountMenu me={me} />
+    </div>
+  );
+}
+
+function AccountMenu({ me }: { me: string }) {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const ref = useDismiss<HTMLDivElement>(open, close);
+  const nav = useNavigate();
+  const acct = account();
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button className="account-btn" aria-label="Account" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <Avatar user={me} size={26} title="" />
+      </button>
+      {open && (
+        <div className="menu" style={{ top: 34, right: 0 }}>
+          <div className="menu-hd">Signed in as <b>{me}</b>{acct?.dev ? ' (dev)' : ''}</div>
+          <div className="menu-sep" />
+          <button className="menu-item" onClick={() => (close(), nav('/me'))}>My work</button>
+          {acct?.installUrl && <a className="menu-item" href={acct.installUrl}>Add a repo…</a>}
+          <div className="menu-sep" />
+          <button className="menu-item" onClick={() => void signOut()}>Sign out</button>
+        </div>
       )}
     </div>
   );

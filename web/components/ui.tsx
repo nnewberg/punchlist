@@ -24,7 +24,19 @@ export function Avatar({ user, size, title }: { user: string | null | undefined;
   const p = person(user);
   const style = size ? { width: size, height: size, fontSize: Math.round(size * 0.42) } : undefined;
   if (!user) return <span className="avatar gh" style={style} title={title ?? 'GitHub'}>gh</span>;
+  if (p.avatar) return <img className="avatar" src={avatarSrc(p.avatar, size ?? 24)} alt="" style={style} title={title ?? p.name} />;
   return <span className="avatar" style={{ background: p.color, ...style }} title={title ?? p.name}>{p.initial}</span>;
+}
+
+/** GitHub avatars take a size; ask for 2× for sharp edges. */
+function avatarSrc(url: string, px: number) {
+  try {
+    const u = new URL(url);
+    u.searchParams.set('s', String(px * 2));
+    return u.toString();
+  } catch {
+    return url;
+  }
 }
 
 export function Logo({ size }: { size?: 'lg' }) {
