@@ -45,6 +45,7 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
   const [arrived, setArrived] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<ToastData | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [lifted, setLifted] = useState<string | null>(null);
   const [dropAt, setDropAt] = useState<{ status: Status; beforeId: string | null } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -119,14 +120,30 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
   const columns = [...COLUMNS, ...(filters.dropped ? [{ key: 'dropped' as const, title: 'Dropped' }] : [])];
   const openItem = openId ? items.get(openId) : undefined;
 
-  const move = (status: Status, beforeId: string | null) => {
-    const id = dragId;
+  const endDrag = () => {
     setDragId(null);
+    setLifted(null);
     setDropAt(null);
-    if (!id || id === beforeId) return;
-    const cur = items.get(id);
-    if (!cur || (cur.status === status && status === 'done')) return;
-    void client.send({ op: 'move', id, status, beforeId: status === 'done' ? null : beforeId });
+  };
+
+  // The slot comes from the pointer's height, not from which card it's over: above a card's middle
+  // means "before it", so anywhere above the first card (header included) drops at the top.
+  const slotAt = (col: HTMLElement, y: number): string | null => {
+    for (const el of col.querySelectorAll<HTMLElement>('.card-wrap[data-item]')) {
+      if (el.dataset.item === dragId) continue;
+      const r = el.getBoundingClientRect();
+      if (y < r.top + r.height / 2) return el.dataset.item!;
+    }
+    return null;
+  };
+
+  /** Dropping the card back into its own slot changes nothing, so it gets no indicator and sends no op. */
+  const stays = (status: Status, beforeId: string | null, list: { id: string }[]) => {
+    const cur = dragId ? items.get(dragId) : undefined;
+    if (!cur || cur.status !== status) return false;
+    if (status === 'done') return true;
+    const i = list.findIndex(x => x.id === cur.id);
+    return (list[i + 1]?.id ?? null) === beforeId;
   };
 
   return (
@@ -152,18 +169,26 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
             list = recent;
           }
           const isCol = col.key !== 'done' && col.key !== 'dropped';
+          const ordered = col.key !== 'done';
+          const here = dragId && dropAt?.status === col.key ? dropAt : null;
           return (
             <div
               key={col.key}
-              className={`col${dropAt?.status === col.key && dropAt.beforeId === null ? ' drop-target' : ''}`}
+              className={`col${here && !ordered ? ' drop-target' : ''}`}
               onDragOver={(e: DragEvent) => {
                 if (!dragId) return;
                 e.preventDefault();
-                if (dropAt?.status !== col.key || dropAt.beforeId !== null) setDropAt({ status: col.key, beforeId: null });
+                const beforeId = ordered ? slotAt(e.currentTarget as HTMLElement, e.clientY) : null;
+                const next = stays(col.key, beforeId, list) ? null : { status: col.key, beforeId };
+                if (next?.status !== dropAt?.status || next?.beforeId !== dropAt?.beforeId) setDropAt(next);
               }}
               onDrop={(e: DragEvent) => {
                 e.preventDefault();
-                move(col.key, null);
+                const id = dragId;
+                const beforeId = ordered ? slotAt(e.currentTarget as HTMLElement, e.clientY) : null;
+                const noop = stays(col.key, beforeId, list);
+                endDrag();
+                if (id && !noop) void client.send({ op: 'move', id, status: col.key, beforeId });
               }}
             >
               <div className="col-hd">
@@ -191,31 +216,20 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
                     arrived={arrived.has(it.id)}
                     onOpen={() => setOpen(it.id)}
                     dnd={{
-                      dragging: dragId === it.id,
-                      dropBefore: !!dragId && dropAt?.beforeId === it.id && dragId !== it.id && col.key !== 'done',
+                      lifted: lifted === it.id && dragId === it.id,
+                      dropBefore: ordered && here?.beforeId === it.id,
                       onDragStart: e => {
                         e.dataTransfer.setData('text/plain', it.id);
                         e.dataTransfer.effectAllowed = 'move';
                         setDragId(it.id);
+                        // Wait a frame so the browser's drag image is the real card, not the ghost.
+                        requestAnimationFrame(() => setLifted(it.id));
                       },
-                      onDragEnd: () => {
-                        setDragId(null);
-                        setDropAt(null);
-                      },
-                      onDragOver: e => {
-                        if (!dragId) return;
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (dropAt?.beforeId !== it.id) setDropAt({ status: it.status, beforeId: it.id });
-                      },
-                      onDrop: e => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        move(it.status, it.id);
-                      },
+                      onDragEnd: endDrag,
                     }}
                   />
                 ))}
+                {ordered && here && here.beforeId === null && <div className="drop-end" />}
                 {list.length === 0 && composer !== col.key && <div className="col-empty">{searching ? 'No matches' : ''}</div>}
                 {older > 0 && <button className="older" onClick={() => setShowOlder(true)}>Show {older} older</button>}
                 {showOlder && col.key === 'done' && !searching && <button className="older" onClick={() => setShowOlder(false)}>Show recent only</button>}

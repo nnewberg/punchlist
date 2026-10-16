@@ -5,12 +5,11 @@ import type { Item } from '../../shared/types';
 import { Avatar, BranchIcon } from './ui';
 
 export interface CardDnd {
-  dragging: boolean;
+  /** Lifted: the card is being dragged, so its slot shows an empty dashed outline. */
+  lifted: boolean;
   dropBefore: boolean;
   onDragStart: (e: DragEvent) => void;
   onDragEnd: () => void;
-  onDragOver: (e: DragEvent) => void;
-  onDrop: (e: DragEvent) => void;
 }
 
 // FR-13, laid out as in the design: the card names only the person working on an item, whether
@@ -32,18 +31,16 @@ export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
   const done = item.status === 'done';
 
   return (
-    <div className={`card-wrap${arrived ? ' arrived' : ''}${dnd?.dropBefore ? ' drop-before' : ''}`}>
+    <div className={`card-wrap${arrived ? ' arrived' : ''}${dnd?.dropBefore ? ' drop-before' : ''}${dnd?.lifted ? ' lifted' : ''}`} data-item={item.id}>
       {caption && <div className="caption">{caption}</div>}
       <div
-        className={`card${dnd?.dragging ? ' dragging' : ''}`}
+        className="card"
         role="button"
         tabIndex={0}
         data-id={item.id}
         draggable={!!dnd}
         onDragStart={dnd?.onDragStart}
         onDragEnd={dnd?.onDragEnd}
-        onDragOver={dnd?.onDragOver}
-        onDrop={dnd?.onDrop}
         onClick={onOpen}
         onKeyDown={e => e.key === 'Enter' && onOpen()}
       >
