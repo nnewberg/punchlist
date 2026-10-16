@@ -39,7 +39,22 @@ export function wsUrl(path: string): string {
 export const boardPath = (b: Pick<BoardInfo, 'owner' | 'repo'>) => `/${b.owner}/${b.repo}`;
 export const boardApi = (b: Pick<BoardInfo, 'owner' | 'repo'>) => `/v1/boards/${encodeURIComponent(b.owner)}/${encodeURIComponent(b.repo)}`;
 
-export interface Me {
-  user: string;
-  boards: BoardInfo[];
+import type { Me } from '../shared/types';
+export type { Me };
+
+let current: Me | null = null;
+/** The signed-in account, set once by App from /v1/me. */
+export const setAccount = (m: Me) => {
+  current = m;
+};
+export const account = () => current;
+
+/** Whether this browser has signed in before (set by the server at sign-in; holds nothing secret). */
+export const knownBrowser = () => document.cookie.split(';').some(c => c.trim() === 'pl_known=1');
+
+export const signInUrl = (next = location.pathname + location.search) => `/auth/login?next=${encodeURIComponent(next)}`;
+
+export async function signOut() {
+  await fetch('/auth/logout', { method: 'POST' });
+  location.href = '/signin';
 }

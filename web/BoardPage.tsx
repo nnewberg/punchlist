@@ -3,7 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { person } from '../shared/config';
 import { isRecentDone, matchesQuery } from '../shared/derive';
 import { columnItems } from '../shared/ops';
-import type { BoardInfo, Column as ColumnKey, Status } from '../shared/types';
+import type { BoardEntry, Column as ColumnKey, Status } from '../shared/types';
 import { useBoard, type RemoteChange } from './boardClient';
 import { Card } from './components/Card';
 import { DetailSheet } from './components/DetailSheet';
@@ -21,11 +21,13 @@ const COLUMNS: { key: Status; title: string }[] = [
 
 const ARRIVE_MS = 6500;
 
-export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
+export function BoardPage({ me, boards }: { me: string; boards: BoardEntry[] }) {
   const { owner = '', repo = '' } = useParams();
   const boardRef = useMemo(() => ({ owner, repo }), [owner, repo]);
   const { client, items, viewers, conn, loaded, missing } = useBoard(boardRef, me);
-  const board = boards.find(b => b.owner === owner && b.repo === repo);
+  const board = boards.find(b => b.owner.toLowerCase() === owner.toLowerCase() && b.repo.toLowerCase() === repo.toLowerCase());
+  // Read access to the repo shows the board; changing it takes write access (FR-2).
+  const canEdit = board?.role === 'edit';
 
   const [params, setParams] = useSearchParams();
   const openId = params.get('open');
@@ -81,14 +83,14 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
       if (e.key === '/') {
         e.preventDefault();
         searchRef.current?.focus();
-      } else if (e.key === 'n') {
+      } else if (e.key === 'n' && canEdit) {
         e.preventDefault();
         setComposer('backlog');
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [openId]);
+  }, [openId, canEdit]);
 
   const all = useMemo(() => [...items.values()], [items]);
   const searching = query.trim() !== '' || filterCount(filters) > 0;
@@ -159,7 +161,7 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
         onQuery={setQuery}
         searchRef={searchRef}
         filter={<FilterMenu filters={filters} onChange={setFilters} {...facets} />}
-        onNew={() => setComposer('backlog')}
+        onNew={canEdit ? () => setComposer('backlog') : undefined}
       />
       <Flip watch={items} hint={flipHint} className={`board${drag ? ' dragging' : ''}`}>
         {columns.map(col => {
@@ -175,7 +177,7 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
                 <Glyph status={col.key} />
                 <span className="title">{col.title}</span>
                 <span className="count">{list.length}</span>
-                {isCol && <button className="icon-btn end" aria-label={`Add to ${col.title}`} onClick={() => setComposer(col.key as ColumnKey)}><PlusIcon /></button>}
+                {isCol && canEdit && <button className="icon-btn end" aria-label={`Add to ${col.title}`} onClick={() => setComposer(col.key as ColumnKey)}><PlusIcon /></button>}
               </div>
               <div className="col-body">
                 {composer === col.key && (
@@ -195,7 +197,7 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
                     items={items}
                     arrived={arrived.has(it.id)}
                     onOpen={() => setOpen(it.id)}
-                    dnd={{ lifted: drag?.id === it.id, shift: shiftAt(i), onPointerDown: e => onPointerDown(it.id, e) }}
+                    dnd={canEdit ? { lifted: drag?.id === it.id, shift: shiftAt(i), onPointerDown: e => onPointerDown(it.id, e) } : undefined}
                   />
                 ))}
                 <div className="col-tail" style={over ? { translate: `0 ${drag!.shift}px` } : undefined}>
@@ -223,6 +225,7 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
           client={client}
           onClose={() => setOpen(null)}
           onOpen={id => setOpen(id)}
+          readOnly={!canEdit}
           onDeleted={(id, seq) => setToast({ key: seq, user: me, text: `Deleted ${id}`, undoSeq: seq })}
         />
       )}
@@ -230,14 +233,14 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
         <Toast
           data={toast}
           onDone={() => setToast(t => (t?.key === toast.key ? null : t))}
-          onUndo={toast.undoSeq ? () => (void client.send({ op: 'undo', seq: toast.undoSeq! }), setToast(null)) : undefined}
+          onUndo={toast.undoSeq && canEdit ? () => (void client.send({ op: 'undo', seq: toast.undoSeq! }), setToast(null)) : undefined}
         />
       )}
     </div>
   );
 }
 
-function Shell({ me, boards, children }: { me: string; boards: BoardInfo[]; children?: ReactNode }) {
+function Shell({ me, boards, children }: { me: string; boards: BoardEntry[]; children?: ReactNode }) {
   return (
     <div className="app">
       <Header me={me} boards={boards} query="" onQuery={() => {}} title="" />

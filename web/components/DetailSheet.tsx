@@ -9,8 +9,9 @@ import type { BoardClient } from '../boardClient';
 import { Avatar, CloseIcon, Field, Glyph, InlineInput, TrashIcon } from './ui';
 
 // Item detail, opened as a centered sheet (design 1b). Everything here is editable in place (FR-12),
-// with history and per-event undo from the event log (FR-15).
-export function DetailSheet({ item, items, board, client, onClose, onOpen, onDeleted }: {
+// with history and per-event undo from the event log (FR-15). Someone with only read access to the
+// repo sees the same sheet without the controls (FR-2).
+export function DetailSheet({ item, items, board, client, onClose, onOpen, onDeleted, readOnly = false }: {
   item: Item;
   items: ReadonlyMap<string, Item>;
   board: BoardInfo;
@@ -18,7 +19,9 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
   onClose: () => void;
   onOpen: (id: string) => void;
   onDeleted: (id: string, seq: number) => void;
+  readOnly?: boolean;
 }) {
+  const ro = readOnly;
   const [history, setHistory] = useState<BoardEvent[]>([]);
   const [adding, setAdding] = useState<null | 'tag' | 'block' | 'dep'>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,10 +67,10 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
         <div className="sheet-hd">
           <span className="id">{item.id}</span>
           <span className="pill"><Glyph status={item.status} />{STATUS_LABEL[item.status]}</span>
-          {(done || dropped) && <button className="btn-reopen" onClick={() => send({ op: 'reopen', id: item.id })}>Reopen</button>}
+          {(done || dropped) && !ro && <button className="btn-reopen" onClick={() => send({ op: 'reopen', id: item.id })}>Reopen</button>}
           <span style={{ flex: 1 }} />
           {/* Nothing is destroyed (PRD §6.1): a deleted item leaves the board but stays searchable, and the toast can undo it. */}
-          {!dropped && (
+          {!dropped && !ro && (
             <button
               className="close-btn trash"
               aria-label="Delete"
@@ -88,8 +91,8 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
               <div style={{ display: 'flex', gap: 8 }}>{error}<span style={{ flex: 1 }} /><button className="btn-link" onClick={() => setError(null)}>Dismiss</button></div>
             </div>
           )}
-          <Title item={item} onSave={title => send({ op: 'edit', id: item.id, title })} />
-          <Body item={item} client={client} />
+          <Title item={item} readOnly={ro} onSave={title => send({ op: 'edit', id: item.id, title })} />
+          <Body item={item} client={client} readOnly={ro} />
 
           <div className="fields">
             <Field label="Status">
@@ -105,22 +108,22 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                     {claim.kind === 'session' && <span className="badge-agent" title={claim.ref ? `Claude session ${claim.ref}` : 'Claude session'}>✦ Claude</span>}
                     {!done && <span style={{ color: 'var(--fg3)' }}>· {age(claim.since)}</span>}
                   </span>
-                  {!done && !dropped && (mine
+                  {!done && !dropped && !ro && (mine
                     ? <button className="btn-sm" onClick={() => send({ op: 'release', id: item.id })}>Release</button>
                     : <button className="btn-sm" onClick={() => send({ op: 'claim', id: item.id, steal: true })} title={`Take this over from ${person(claim.user).name}; the log records it`}>Take over</button>)}
                 </>
               ) : (
                 <>
                   <span style={{ color: 'var(--fg3)' }}>Unclaimed</span>
-                  {!done && !dropped && <button className="btn-sm" onClick={() => send({ op: 'claim', id: item.id })}>Claim</button>}
+                  {!done && !dropped && !ro && <button className="btn-sm" onClick={() => send({ op: 'claim', id: item.id })}>Claim</button>}
                 </>
               )}
             </Field>
             <Field label="Tags">
               {item.tags.map(t => (
-                <span key={t} className="tag">{t}<button aria-label={`Remove ${t}`} onClick={() => send({ op: 'tag', id: item.id, remove: [t] })}>×</button></span>
+                <span key={t} className="tag">{t}{!ro && <button aria-label={`Remove ${t}`} onClick={() => send({ op: 'tag', id: item.id, remove: [t] })}>×</button>}</span>
               ))}
-              {adding === 'tag'
+              {ro ? (!item.tags.length && <span style={{ color: 'var(--fg3)' }}>None</span>) : adding === 'tag'
                 ? <InlineInput placeholder="tag" onSubmit={v => (send({ op: 'tag', id: item.id, add: v.split(/[\s,]+/) }), setAdding(null))} onCancel={() => setAdding(null)} />
                 : <button className="btn-dashed" onClick={() => setAdding('tag')}>+ tag</button>}
             </Field>
@@ -135,7 +138,7 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                   <span className="t">{d.title}</span>
                 </span>
               ))}
-              {item.blocked
+              {ro ? (!item.blocked && !deps.length && <span style={{ color: 'var(--fg3)' }}>No</span>) : item.blocked
                 ? <button className="btn-sm" onClick={() => send({ op: 'unblock', id: item.id })}>Unblock</button>
                 : adding === 'block'
                   ? <InlineInput placeholder="Reason" onSubmit={v => (send({ op: 'block', id: item.id, reason: v }), setAdding(null))} onCancel={() => setAdding(null)} />
@@ -148,11 +151,11 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                 return (
                   <span key={id} className={`tag dep${finished ? ' finished' : ''}`}>
                     <a onClick={() => onOpen(id)}>{id}</a>
-                    <button aria-label={`Remove dependency ${id}`} onClick={() => send({ op: 'depends', id: item.id, remove: [id] })}>×</button>
+                    {!ro && <button aria-label={`Remove dependency ${id}`} onClick={() => send({ op: 'depends', id: item.id, remove: [id] })}>×</button>}
                   </span>
                 );
               })}
-              {adding === 'dep'
+              {ro ? (!item.depends_on.length && <span style={{ color: 'var(--fg3)' }}>None</span>) : adding === 'dep'
                 ? <InlineInput placeholder={`${board.prefix}-012`} onSubmit={v => (send({ op: 'depends', id: item.id, add: [v] }), setAdding(null))} onCancel={() => setAdding(null)} />
                 : <button className="btn-dashed" onClick={() => setAdding('dep')}>+ dependency</button>}
             </Field>
@@ -187,7 +190,8 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                   </div>
                 </div>
               ))}
-              <NoteInput onSubmit={text => send({ op: 'note', id: item.id, text })} />
+              {!ro && <NoteInput onSubmit={text => send({ op: 'note', id: item.id, text })} />}
+              {ro && !item.notes.length && <div style={{ color: 'var(--fg3)', fontSize: 13 }}>No notes</div>}
             </div>
           </div>
 
@@ -203,7 +207,7 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                   {' '}<span className="who">· {e.actor.user ? person(e.actor.user).name : 'GitHub'}</span>
                 </span>
                 <span className="age">{age(e.ts)}</span>
-                {e.undoable && !undone.has(e.seq) && (
+                {e.undoable && !undone.has(e.seq) && !ro && (
                   <button className="btn-link" onClick={() => send({ op: 'undo', seq: e.seq })}>Undo</button>
                 )}
               </div>
@@ -215,8 +219,9 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
   );
 }
 
-function Title({ item, onSave }: { item: Item; onSave: (t: string) => void }) {
+function Title({ item, onSave, readOnly }: { item: Item; onSave: (t: string) => void; readOnly: boolean }) {
   const [editing, setEditing] = useState(false);
+  if (readOnly) return <div className="det-title ro">{item.title}</div>;
   if (!editing) return <div className="det-title" onClick={() => setEditing(true)} title="Click to edit">{item.title}</div>;
   return (
     <input
@@ -241,7 +246,7 @@ function Title({ item, onSave }: { item: Item; onSave: (t: string) => void }) {
 
 // Body edits carry the version they started from; if someone else saved in between, show their text
 // and keep this draft rather than dropping it (FR-8).
-function Body({ item, client }: { item: Item; client: BoardClient }) {
+function Body({ item, client, readOnly }: { item: Item; client: BoardClient; readOnly: boolean }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [base, setBase] = useState(item.body_version);
   const [conflict, setConflict] = useState<Extract<OpError, { code: 'conflict' }> | null>(null);
@@ -264,6 +269,9 @@ function Body({ item, client }: { item: Item; client: BoardClient }) {
     } else if (r.error.code === 'conflict') setConflict(r.error);
   };
 
+  if (readOnly) {
+    return item.body.trim() ? <div className="body-view ro"><div className="md"><Markdown>{item.body}</Markdown></div></div> : null;
+  }
   if (draft === null) {
     return (
       <div className="body-view" onClick={e => !(e.target instanceof HTMLAnchorElement) && start()} title="Click to edit">

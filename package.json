@@ -6,12 +6,13 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run db:local && vite",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "cf-typegen": "wrangler types --strict-vars=false worker/worker-configuration.d.ts"
+    "cf-typegen": "wrangler types --strict-vars=false worker/worker-configuration.d.ts",
+    "db:local": "wrangler d1 migrations apply DB --local"
   },
   "dependencies": {
     "fractional-indexing": "^3.4.0",

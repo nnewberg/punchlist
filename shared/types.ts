@@ -115,6 +115,31 @@ export interface BoardInfo {
   prefix: string;
 }
 
+/** What someone may do on a board, from their access to the repo (FR-2): write → edit, read → view. */
+export type Role = 'edit' | 'view' | 'none';
+
+/** A board as listed for one person, with their role on it. */
+export interface BoardEntry extends BoardInfo {
+  role: Exclude<Role, 'none'>;
+}
+
+/** How to show someone: their GitHub name and avatar. Keyed by login. */
+export interface PersonInfo {
+  name: string | null;
+  avatar: string | null;
+}
+
+/** GET /v1/me */
+export interface Me {
+  user: string;
+  boards: BoardEntry[];
+  people: Record<string, PersonInfo>;
+  /** Where to install the GitHub App on another repo, if GitHub is set up. */
+  installUrl: string | null;
+  /** Dev identity stub in use (DEV_MODE). */
+  dev: boolean;
+}
+
 export interface Snapshot {
   board: BoardInfo;
   items: Item[];
@@ -125,6 +150,7 @@ export interface Snapshot {
 export type OpError =
   | { code: 'not_found'; message: string }
   | { code: 'invalid'; message: string }
+  | { code: 'forbidden'; message: string }
   | { code: 'claimed'; message: string; holder: Claim }
   | { code: 'conflict'; message: string; by?: string; theirs: string; version: number };
 

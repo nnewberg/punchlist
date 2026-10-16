@@ -3,20 +3,37 @@
   "name": "punchlist",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-10-01",
+  // Nick@newbergfamily.net's Account (PRD §5). Pinned because wrangler can reach several accounts.
+  "account_id": "0ab67dd89d404278b6fdc5bb4d22b4b5",
   "observability": { "enabled": true },
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    // Only the API reaches the Worker; everything else is the static web board.
-    "run_worker_first": ["/v1/*"]
+    // The API, sign-in and GitHub routes reach the Worker; everything else is the static web board.
+    "run_worker_first": ["/v1/*", "/auth/*", "/github/*"]
   },
   "durable_objects": {
     "bindings": [{ "name": "BOARD", "class_name": "BoardDO" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardDO"] }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "punchlist",
+      "database_id": "7bb5d5e5-12d4-4a37-8e4e-e9c8ff1888d4",
+      "migrations_dir": "migrations"
+    }
+  ],
   "vars": {
-    // "1" enables the dev identity stub (?as=nick|aaron|kevin), sample-data seeding and the
+    // "1" enables the dev identity stub (?as=nick|aaron|kevin), sample boards and data, and the
     // simulated GitHub close. Set in .dev.vars for local dev; never in production.
-    "DEV_MODE": "0"
+    "DEV_MODE": "0",
+    // Only repos owned by these accounts get boards. The App has to be installable by any account to
+    // reach both a personal account and an org, so installs anywhere else are ignored.
+    "ALLOWED_OWNERS": "nnewberg,futureleisurefoundation",
+    // The App's URL name on GitHub, for "Add a repo" (github.com/apps/<slug>/installations/new).
+    "GITHUB_APP_SLUG": "punchlist"
+    // Secrets (wrangler secret put; locally in .dev.vars): GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY
+    // (PKCS#8 PEM), GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_WEBHOOK_SECRET.
   }
 }
