@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { applyOp, columnItems, inversePatch } from '../shared/ops';
-import type { Actor, BoardEvent, BoardInfo, ClientMsg, EventMeta, Item, MyWorkBoard, Op, OpError, Role, ServerMsg, Snapshot } from '../shared/types';
+import { CLIENT_SOURCES, SESSION_TTL_MS, type Actor, type BoardEvent, type BoardInfo, type ClientMsg, type EventMeta, type Item, type MyWorkBoard, type Op, type OpError, type Role, type ServerMsg, type Snapshot } from '../shared/types';
 import { ingest, type GhFacts } from './ingest';
 import { buildSeed } from './seed';
 
@@ -15,6 +15,15 @@ export type ApplyOutcome =
 
 /** Ops a client may send. GitHub ops (`cite`, `link_pr`, `revert`, `branch_end`) and `restore` are produced by the service itself. */
 export const CLIENT_OPS = new Set<Op['op']>(['create', 'move', 'edit', 'claim', 'release', 'block', 'unblock', 'note', 'tag', 'depends', 'reopen', 'drop', 'undo']);
+
+/** Why a client may not send this op, or null if it may. */
+export function refuseClientOp(op: Op | null | undefined): string | null {
+  if (!op || !CLIENT_OPS.has(op.op)) return 'Unsupported op';
+  if (op.op === 'create' && op.source !== undefined && !(CLIENT_SOURCES as readonly string[]).includes(op.source)) {
+    return `An item's source can only be ${CLIENT_SOURCES.join(', ')}`;
+  }
+  return null;
+}
 
 interface SocketAttachment {
   user: string;
@@ -37,6 +46,13 @@ interface EventRow extends Record<string, SqlStorageValue> {
 const RESYNC_AFTER = 500;
 /** How long a webhook delivery ID is remembered, to ignore GitHub's repeats (FR-29). */
 const DELIVERY_TTL_MS = 30 * 86400_000;
+/** A session's last heartbeat is written at most this often (§8: no write per heartbeat). */
+const HEARTBEAT_WRITE_MS = 10 * 60_000;
+
+/** What a Claude session holds on this board, returned to its hooks. */
+export interface SessionState {
+  held: Item[];
+}
 
 export class BoardDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -44,6 +60,10 @@ export class BoardDO extends DurableObject<Env> {
   private info: BoardInfo | null = null;
   private seq = 0;
   private nextNum = 1;
+  /** Last heartbeat per Claude session, in ms. Kept in memory; written to `sessions` coarsely. */
+  private seen = new Map<string, { at: number; stored: number }>();
+  /** When the alarm is set for, as far as this instance knows. */
+  private alarmAt: number | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -63,6 +83,11 @@ export class BoardDO extends DurableObject<Env> {
     // landed on the default branch.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS gh_deliveries (id TEXT PRIMARY KEY, at TEXT NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS gh_commits (sha TEXT PRIMARY KEY, pr INTEGER, merge INTEGER NOT NULL DEFAULT 0, on_default INTEGER NOT NULL DEFAULT 0)`);
+    // Claude sessions' last heartbeats, for session claims' lapse (FR-28).
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user TEXT NOT NULL, last_seen INTEGER NOT NULL)`);
+    for (const r of this.sql.exec<{ id: string; last_seen: number }>(`SELECT id, last_seen FROM sessions`)) {
+      this.seen.set(r.id, { at: r.last_seen, stored: r.last_seen });
+    }
     const meta = new Map(this.sql.exec<{ k: string; v: string }>(`SELECT k, v FROM meta`).toArray().map(r => [r.k, r.v]));
     if (meta.has('info')) this.info = JSON.parse(meta.get('info')!);
     this.seq = Number(meta.get('seq') ?? 0);
@@ -203,6 +228,7 @@ export class BoardDO extends DurableObject<Env> {
       );
     });
     for (const c of changed) this.broadcast({ type: 'event', event: c.event, item: c.item });
+    if (changed.length) this.scheduleLapse();
     return { duplicate, changes: changed.length };
   }
 
@@ -213,8 +239,93 @@ export class BoardDO extends DurableObject<Env> {
       outcome = this.applyInner(op, actor);
     });
     outcome = outcome!;
-    if (outcome.ok && !('noop' in outcome)) this.broadcast({ type: 'event', event: outcome.event, item: outcome.item, ...(clientOpId ? { clientOpId } : {}) });
+    if (outcome.ok && !('noop' in outcome)) {
+      this.broadcast({ type: 'event', event: outcome.event, item: outcome.item, ...(clientOpId ? { clientOpId } : {}) });
+      this.scheduleLapse();
+    }
     return outcome;
+  }
+
+  // ---- Claude sessions (FR-24, FR-28) ----
+
+  /**
+   * A Claude session's hooks: `heartbeat` keeps its claims alive, `end` releases them. Returns what
+   * the session still holds. `now` is for tests.
+   */
+  session(info: BoardInfo, actor: Actor & { user: string; session: string }, action: 'heartbeat' | 'end', now = Date.now()): SessionState {
+    this.ensure(info);
+    const id = actor.session;
+    if (action === 'end') {
+      const changed: { event: BoardEvent; item: Item }[] = [];
+      this.ctx.storage.transactionSync(() => {
+        for (const it of this.sessionClaims(id, actor.user)) {
+          const out = this.applyInner({ op: 'release', id: it.id, reason: 'Released when the Claude session ended' }, actor);
+          if (out.ok && !('noop' in out)) changed.push(out);
+        }
+        this.sql.exec(`DELETE FROM sessions WHERE id = ?`, id);
+      });
+      this.seen.delete(id);
+      for (const c of changed) this.broadcast({ type: 'event', event: c.event, item: c.item });
+      this.scheduleLapse();
+      return { held: [] };
+    }
+    const prev = this.seen.get(id);
+    const stored = prev && now - prev.stored < HEARTBEAT_WRITE_MS ? prev.stored : now;
+    if (stored === now) {
+      this.sql.exec(`INSERT INTO sessions (id, user, last_seen) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET last_seen = excluded.last_seen`, id, actor.user, now);
+    }
+    this.seen.set(id, { at: now, stored });
+    return { held: this.sessionClaims(id, actor.user) };
+  }
+
+  private sessionClaims(session: string, user: string): Item[] {
+    return [...this.items.values()].filter(i => i.claim?.kind === 'session' && i.claim.ref === session && i.claim.user === user);
+  }
+
+  /** When a session claim lapses: two hours after its session's last heartbeat, or after the claim if there was none since. */
+  private lapsesAt(it: Item): number | null {
+    const c = it.claim;
+    if (c?.kind !== 'session' || it.status === 'done' || it.status === 'dropped') return null;
+    const beat = c.ref ? (this.seen.get(c.ref)?.at ?? 0) : 0;
+    return Math.max(beat, Date.parse(c.since)) + SESSION_TTL_MS;
+  }
+
+  /** Keeps the alarm set for the first session claim that could lapse. Heartbeats only push lapses later, so an early alarm just re-checks. */
+  private scheduleLapse() {
+    let first: number | null = null;
+    for (const it of this.items.values()) {
+      const t = this.lapsesAt(it);
+      if (t != null && (first == null || t < first)) first = t;
+    }
+    if (first == null || (this.alarmAt != null && this.alarmAt <= first && this.alarmAt > Date.now())) return;
+    this.alarmAt = first;
+    void this.ctx.storage.setAlarm(first);
+  }
+
+  async alarm() {
+    this.alarmAt = null;
+    this.expireClaims(Date.now());
+  }
+
+  /** Releases the session claims that have lapsed by `now` (FR-28), and sets the next alarm. Exposed for tests. */
+  expireClaims(now: number): number {
+    if (!this.info) return 0;
+    const changed: { event: BoardEvent; item: Item }[] = [];
+    this.ctx.storage.transactionSync(() => {
+      for (const it of [...this.items.values()]) {
+        const t = this.lapsesAt(it);
+        if (t == null || t > now) continue;
+        const out = this.applyInner({ op: 'release', id: it.id, reason: 'Claim lapsed: no word from its Claude session for 2 hours' }, { user: it.claim!.user, via: 'reconciler' });
+        if (out.ok && !('noop' in out)) changed.push(out);
+      }
+      // Forget sessions that have been quiet for well past the lapse.
+      const old = now - 2 * SESSION_TTL_MS;
+      this.sql.exec(`DELETE FROM sessions WHERE last_seen < ?`, old);
+      for (const [id, s] of this.seen) if (s.at < old) this.seen.delete(id);
+    });
+    for (const c of changed) this.broadcast({ type: 'event', event: c.event, item: c.item });
+    this.scheduleLapse();
+    return changed.length;
   }
 
   private applyInner(op: Op, actor: Actor): ApplyOutcome {
@@ -278,7 +389,8 @@ export class BoardDO extends DurableObject<Env> {
     const { user, role } = ws.deserializeAttachment() as SocketAttachment;
     if (msg.type === 'op') {
       if (role !== 'edit') return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'forbidden', message: 'You can view this board but not change it.' } });
-      if (!CLIENT_OPS.has(msg.op.op)) return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'invalid', message: 'Unsupported op' } });
+      const refused = refuseClientOp(msg.op);
+      if (refused) return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'invalid', message: refused } });
       const out = this.apply(this.info!, msg.op, { user, via: 'web' }, msg.clientOpId);
       if (!out.ok) this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: out.error });
       else if ('noop' in out) this.send(ws, { type: 'ack', clientOpId: msg.clientOpId });

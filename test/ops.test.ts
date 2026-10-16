@@ -50,6 +50,29 @@ describe('applyOp', () => {
     expect(it.status).toBe('up_next');
   });
 
+  it("refuses a claim your other Claude session holds, unless stolen; the same session claiming again changes nothing", () => {
+    const b = board();
+    b.run({ op: 'create', title: 'x', status: 'up_next' });
+    const s1: Actor = { user: 'nick', via: 'claude', session: 's1' };
+    b.run({ op: 'claim', id: 'PL-001' }, s1);
+    expect(b.run({ op: 'claim', id: 'PL-001' }, s1)).toMatchObject({ ok: true, noop: true });
+    const res = b.run({ op: 'claim', id: 'PL-001' }, { ...s1, session: 's2' });
+    expect(!res.ok && res.error).toMatchObject({ code: 'claimed', message: 'Your other Claude session has PL-001' });
+    b.run({ op: 'claim', id: 'PL-001', steal: true }, { ...s1, session: 's2' });
+    expect(b.items.get('PL-001')!.claim).toMatchObject({ kind: 'session', ref: 's2' });
+  });
+
+  it("a session claim doesn't replace your own branch or hand-made claim", () => {
+    const b = board();
+    b.run({ op: 'create', title: 'x', status: 'up_next' });
+    b.run({ op: 'claim', id: 'PL-001', kind: 'branch', ref: 'nick/pl-001' }, { user: 'nick', via: 'github' });
+    expect(b.run({ op: 'claim', id: 'PL-001' }, { user: 'nick', via: 'claude', session: 's1' })).toMatchObject({ ok: true, noop: true });
+    b.run({ op: 'create', title: 'y', status: 'up_next' });
+    b.run({ op: 'claim', id: 'PL-002' }, nick);
+    expect(b.run({ op: 'claim', id: 'PL-002' }, { user: 'nick', via: 'claude', session: 's1' })).toMatchObject({ ok: true, noop: true });
+    expect(b.items.get('PL-002')!.claim).toMatchObject({ kind: 'manual' });
+  });
+
   it('refuses a claim held by someone else unless stolen (FR-27)', () => {
     const b = board();
     b.run({ op: 'create', title: 'x' });

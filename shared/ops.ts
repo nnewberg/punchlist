@@ -163,11 +163,21 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
     }
     case 'claim': {
       if (it.status === 'done' || it.status === 'dropped') return fail('invalid', 'Reopen the item before claiming it');
-      if (it.claim && it.claim.user !== user && !op.steal) {
-        return { ok: false, error: { code: 'claimed', message: `${person(it.claim.user).name} already has ${it.id}`, holder: it.claim } };
+      const kind = op.kind ?? (actor.session ? 'session' : 'manual');
+      const ref = op.ref ?? actor.session;
+      const held = it.claim;
+      if (held && held.user !== user && !op.steal) {
+        return { ok: false, error: { code: 'claimed', message: `${person(held.user).name} already has ${it.id}`, holder: held } };
       }
-      const stolen = it.claim && it.claim.user !== user ? it.claim.user : null;
-      it.claim = { user, kind: op.kind ?? (actor.session ? 'session' : 'manual'), ...((op.ref ?? actor.session) ? { ref: op.ref ?? actor.session } : {}), since: now };
+      if (held && held.user === user && !op.steal) {
+        if (held.kind === kind && held.ref === ref) return { ok: true, noop: true, item: cur };
+        // A branch or a hand-made claim outlives any one session, so a session doesn't replace it.
+        if (kind === 'session' && held.kind !== 'session') return { ok: true, noop: true, item: cur };
+        // Two of your own Claude sessions working on one item is duplicated work too (FR-27).
+        if (kind === 'session') return { ok: false, error: { code: 'claimed', message: `Your other Claude session has ${it.id}`, holder: held } };
+      }
+      const stolen = held && held.user !== user ? held.user : null;
+      it.claim = { user, kind, ...(ref ? { ref } : {}), since: now };
       if (it.status !== 'in_progress') {
         it.rank = rankFor(items.values(), 'in_progress', null, it.id);
         setStatus(it, 'in_progress', now);
@@ -183,7 +193,7 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
         it.rank = rankFor(items.values(), to, 'top', it.id);
         setStatus(it, to, now);
       }
-      meta = { text: 'Released' };
+      meta = { text: op.reason?.trim() || 'Released' };
       break;
     }
     case 'block': {

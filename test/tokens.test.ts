@@ -97,6 +97,29 @@ describe('ops from the CLI', () => {
     expect(out.item.source).toMatchObject({ kind: 'chat', ref: 'session 3f2a' });
   });
 
+  it('can only say an item came from chat, deferred work or the CLI', async () => {
+    await setup();
+    const token = await cliToken();
+    const deferred = await call(`${path}/ops`, { method: 'POST', token, body: JSON.stringify({ op: 'create', title: 'later', source: 'claude-deferred' }) });
+    expect(((await deferred.json()) as { item: Item }).item.source.kind).toBe('claude-deferred');
+    const forged = await call(`${path}/ops`, { method: 'POST', token, body: JSON.stringify({ op: 'create', title: 'x', source: 'github' }) });
+    expect(forged.status).toBe(400);
+  });
+
+  it("a Claude session's heartbeat reports what it holds, and ending it releases them (FR-24)", async () => {
+    await setup();
+    const token = await cliToken();
+    const headers = { 'x-punch-via': 'claude', 'x-punch-session': 'abc' };
+    const made = (await (await call(`${path}/ops`, { method: 'POST', token, headers, body: JSON.stringify({ op: 'create', title: 'mine', status: 'up_next' }) })).json()) as { item: Item };
+    await call(`${path}/ops`, { method: 'POST', token, headers, body: JSON.stringify({ op: 'claim', id: made.item.id }) });
+    const beat = (await (await call(`${path}/session`, { method: 'POST', token, headers, body: JSON.stringify({ action: 'heartbeat' }) })).json()) as { held: Item[] };
+    expect(beat.held.map(i => i.id)).toEqual([made.item.id]);
+    expect((await call(`${path}/session`, { method: 'POST', token, headers, body: JSON.stringify({ action: 'end' }) })).status).toBe(200);
+    const snap = (await (await call(path, { token })).json()) as { items: Item[] };
+    expect(snap.items.find(i => i.id === made.item.id)!.claim).toBeNull();
+    expect((await call(`${path}/session`, { method: 'POST', token, body: JSON.stringify({ action: 'end' }) })).status).toBe(400);
+  });
+
   it('can be sent as a batch that stops at the first refusal', async () => {
     await setup();
     const token = await cliToken();
