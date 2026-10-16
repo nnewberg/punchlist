@@ -50,3 +50,5 @@ PUNCH_CLI=$PWD/cli/dist/punch.mjs claude --plugin-dir plugins/punchlist
 When the plugin needs a new CLI:
 1. Publish the CLI.
 2. Bump `cli-version`.
+
+Bump `version` in `.claude-plugin/plugin.json` whenever anything in this folder changes. Teammates' Claude Code updates the plugin when that number changes; without it, every commit to this repo (even one that only touches the Worker) would count as a plugin update.

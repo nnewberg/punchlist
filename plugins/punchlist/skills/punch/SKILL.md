@@ -1,7 +1,7 @@
 ---
 name: punch
-description: Show or change this repo's shared Punchlist board. Usage - /punch, /punch add <text>, /punch start <ID>, /punch done <ID> [note], /punch block <ID> <reason>, /punch login
-argument-hint: "[add <text> | start <ID> | done <ID> [note] | block <ID> <reason> | login]"
+description: Show or change this repo's shared Punchlist board. Usage - /punch, /punch add TEXT, /punch start ID, /punch done ID [note], /punch block ID REASON, /punch login
+argument-hint: "[add TEXT | start ID | done ID [note] | block ID REASON | login]"
 allowed-tools: Bash(punch *)
 disable-model-invocation: true
 ---
@@ -15,7 +15,7 @@ The user typed `/punch $ARGUMENTS`. Do the matching action below with the `punch
 | `start <ID>` | Run `punch start <ID>`. If someone else holds it, say who, and don't steal unless they say so. Then ask whether to begin the work. |
 | `done <ID> [note]` | Run `punch close <ID> -m "<note>"` (leave off `-m` if there's no note). This closes it by hand, which they've asked for. |
 | `block <ID> <reason>` | Run `punch block <ID> "<reason>"`. |
-| `login` | Run `punch login --start`, and tell them the code and the URL. Then run `punch login --finish` with a 10-minute Bash timeout, and say who is now signed in. |
+| `login` | Run `punch login --start`. It opens a GitHub page in their browser; tell them so, with the code to enter there and the URL in case no page opened. Then run `punch login --finish` with a 10-minute Bash timeout, and say who is now signed in. |
 | anything else | Pass it straight through as `punch <their words>`. For example, `/punch release PS-4` runs `punch release PS-4`. |
 
 Commands print a plain-text summary, and you can show it as is. On an error, say what it means in a sentence.

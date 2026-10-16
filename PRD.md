@@ -555,7 +555,7 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - **Where it lives.** `plugins/punchlist`, with this repo as its marketplace (`.claude-plugin/marketplace.json`; install id `punchlist@punchlist`).
   - Teammates can't fetch a plugin from a private repo, so `nnewberg/punchlist` was made public on 2026-10-16 (decided with Nick, after a history scan found no secrets). Boards stay private either way.
   - Checked from a clean Claude config: the marketplace adds and the plugin installs from GitHub, and its first session start installs `punch` from npm and shows the board.
-  - The plugin has no `version`, so installs follow commits through auto-update.
+  - The plugin carries a `version` (0.2.0), bumped whenever the plugin folder changes. An earlier version had none, so every commit to this repo counted as a plugin update for everyone, even commits that only touched the Worker. The onboarding test found this.
 - **The CLI inside it.** `bin/punch` installs the `punch` version named in `cli-version` into the plugin's data folder on first use, then runs it. The first run takes about 1 s, later runs about 30 ms.
   - The install uses `--prefer-online`, because npm's cached package list doesn't know about a version published minutes earlier.
   - If the install fails, session start tells Claude the board isn't loaded, rather than staying silent.
