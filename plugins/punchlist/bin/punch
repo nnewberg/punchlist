@@ -20,8 +20,14 @@ if [ -n "$data" ]; then
       exit 1
     fi
     mkdir -p "$data/cli"
-    npm install --prefix "$data/cli" --no-save --no-audit --no-fund --loglevel=error "@nnewberg/punchlist@$want" >&2 || {
+    # --prefer-online: a version published minutes ago isn't in npm's cached package list yet.
+    npm install --prefix "$data/cli" --no-save --no-audit --no-fund --loglevel=error --prefer-online "@nnewberg/punchlist@$want" >&2 || {
       echo "punch: couldn't install @nnewberg/punchlist@$want." >&2
+      # Session start's output goes to Claude, so say why the board is missing instead of nothing.
+      if [ "$1 $2" = "hook session-start" ]; then
+        echo "Punchlist: the plugin couldn't install punch $want from npm, so the board isn't loaded this session. Tell the user once."
+        exit 0
+      fi
       exit 1
     }
   fi

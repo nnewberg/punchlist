@@ -438,7 +438,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 |---|---|---|---|
 | **M1 Service core** | Worker, board Durable Object, data model, event log, REST API, GitHub App install + sign-in, CLI basics (FR-1–9, 17–20) | Nick and a second account edit the same board from two CLIs, and each sees the other's changes | **Built and live.** Proven locally with two dev identities. `punch` 0.1.0 is on npm. Not yet tried with Aaron's or Kevin's real accounts. |
 | **M2 Web board** | FR-10–16 | Two browsers stay in sync live, with drag, edit, presence, history and undo | **Built and live** |
-| **M3 Claude plugin** | Skill, commands, hooks, claims, onboarding (FR-21–28) | S1, S2, S4 and S10 work across two machines, and a teammate goes from a fresh clone to a working plugin with one command | **Built** (FR-21–24, FR-25a, session claims with heartbeat and lapse). S1, S2, S4 and S10 pass on production as `claude -p` runs (2026-10-16), with a second session of Nick's playing the other person. Still to do: a second GitHub account for a true two-person run; npm publish of `punch` 0.2.0; the repo going public so teammates can install the plugin |
+| **M3 Claude plugin** | Skill, commands, hooks, claims, onboarding (FR-21–28) | S1, S2, S4 and S10 work across two machines, and a teammate goes from a fresh clone to a working plugin with one command | **Built** (FR-21–24, FR-25a, session claims with heartbeat and lapse). S1, S2, S4 and S10 pass on production as `claude -p` runs (2026-10-16), with a second session of Nick's playing the other person. `punch` 0.2.0 is on npm, and the plugin installs it on first use. Still to do: a second GitHub account for a true two-person run, and the repo going public so teammates can install the plugin |
 | **M4 GitHub auto-close** | Webhooks, explicit closes, pending-on-branch, PR links, reverts, inferred closes (FR-29–34) | S5–S9 work on a real repo | **Deterministic sync built** (FR-26 branch claims, FR-29–31, FR-33, FR-34), with acceptance tests against `nnewberg/punchlist-sandbox`; S4, S5 (squash, merge and rebase), S6, S8 and S9 pass on production (2026-10-16). Inferred closes (FR-32) are step 3 of §9.1 |
 | **M5 Migrate and dogfood** | Imports (FR-36–39), My work (FR-35) | Both repos are imported, Aaron and Kevin are onboarded, and the §10 metrics are tracked | My work is built; the imports are not |
 
@@ -520,7 +520,7 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 **CLI**
 - Published as the public npm package `@nnewberg/punchlist` (client code only).
 - Publishing needs Nick's security-key 2FA, so `npm publish` runs in his own terminal, not from an agent.
-- 0.2.0 is built but unpublished. It adds `search`, `add --deferred`, `login --start/--finish` and `hook`, and lowers the Node requirement to 20.
+- 0.2.0 is published (2026-10-16). It adds `search`, `add --deferred`, `login --start/--finish` and `hook`, and lowers the Node requirement to 20.
 
 **UI words**
 - The `dropped` status is shown as **Delete** (trash icon, Undo toast). It's still the soft delete from §6.1, and the CLI command keeps the name `drop`.
@@ -549,6 +549,8 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
   - Teammates can't fetch a plugin from a private repo, so `nnewberg/punchlist` is to be made public (decided with Nick). Boards stay private either way.
   - The plugin has no `version`, so installs follow commits through auto-update.
 - **The CLI inside it.** `bin/punch` installs the `punch` version named in `cli-version` into the plugin's data folder on first use, then runs it. The first run takes about 1 s, later runs about 30 ms.
+  - The install uses `--prefer-online`, because npm's cached package list doesn't know about a version published minutes earlier.
+  - If the install fails, session start tells Claude the board isn't loaded, rather than staying silent.
   - SessionStart puts that `bin` first on the PATH of Claude's shell. A global `punch` would otherwise shadow it, because Claude Code appends plugin `bin/` folders after nvm's.
 - **Rules every session.** The must-follow rules (`rules.md`) are printed by SessionStart, because a skill only loads when Claude decides it's relevant. The `punchlist` skill holds the details. The rules live in the plugin, so changing them doesn't need an npm publish.
 - **Two refinements from the acceptance runs.** Both were behaviors Claude got wrong until the rules spelled them out:
