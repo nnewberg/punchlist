@@ -135,8 +135,11 @@ input, textarea { font: inherit; color: var(--fg); }
 .board { flex: 1; min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, 1fr); grid-template-rows: minmax(0, 1fr); gap: var(--colgap); padding: var(--board-pad); overflow-x: auto; }
 .col { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-radius: var(--col-r); padding: var(--col-pad); }
 .col-hd { display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 6px; flex: none; font-size: var(--col-title); font-weight: 600; color: var(--fg2); }
-.col-hd .glyph { font-size: 11px; color: var(--fg3); }
-.col-hd .glyph.ok { color: var(--ok); }
+.glyph { width: 13px; height: 13px; flex: none; display: block; }
+.glyph.backlog, .glyph.dropped { color: var(--fg3); }
+.glyph.up_next { color: var(--fg2); }
+.glyph.in_progress { color: var(--pend); }
+.glyph.done { color: var(--ok); }
 .col-hd .title { color: var(--fg); }
 .col-hd .count { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--fg3); }
 .col-hd .sub { font-weight: 400; color: var(--fg3); font-size: 12px; }
@@ -218,8 +221,7 @@ html.is-dragging, html.is-dragging * { cursor: grabbing !important; -webkit-user
 .sheet-hd { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 20px; border-bottom: 1px solid var(--line); flex: none; }
 .sheet-hd .id { font-family: var(--mono); font-size: 12px; color: var(--fg3); }
 .pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--br); background: var(--bg); border: 1px solid var(--line); font-size: 12px; font-weight: 500; }
-.pill .glyph { font-size: 10px; color: var(--fg3); }
-.pill .glyph.ok { color: var(--ok); }
+.pill .glyph { width: 11px; height: 11px; }
 .btn-reopen { font-size: 12px; font-weight: 500; height: 24px; padding: 0 10px; border-radius: var(--btn-r); border: 1px solid var(--line); background: var(--card); color: var(--accentFg); cursor: pointer; }
 .btn-reopen:hover { background: var(--hover); }
 .close-btn { width: 26px; height: 26px; border-radius: var(--btn-r); border: 0; background: transparent; color: var(--fg2); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }

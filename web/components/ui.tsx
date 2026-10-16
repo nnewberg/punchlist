@@ -2,10 +2,22 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { person } from '../../shared/config';
 import type { Status } from '../../shared/types';
 
-export const GLYPH: Record<Status, string> = { backlog: '○', up_next: '◔', in_progress: '◑', done: '●', dropped: '⊘' };
-
+/** Status as progress around a circle: dashed (not committed), empty (ready), half (underway), full (done). */
 export function Glyph({ status }: { status: Status }) {
-  return <span className={`glyph${status === 'done' ? ' ok' : ''}`} aria-hidden>{GLYPH[status]}</span>;
+  return (
+    <svg className={`glyph ${status}`} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden>
+      {status === 'backlog' && <circle cx="7" cy="7" r="6" strokeDasharray="2.36 2.36" transform="rotate(-11 7 7)" />}
+      {(status === 'up_next' || status === 'in_progress' || status === 'dropped') && <circle cx="7" cy="7" r="6" />}
+      {status === 'in_progress' && <path d="M7 3.25a3.75 3.75 0 0 1 0 7.5z" fill="currentColor" stroke="none" />}
+      {status === 'done' && (
+        <>
+          <circle cx="7" cy="7" r="6.75" fill="currentColor" stroke="none" />
+          <path d="M4.4 7.2l1.8 1.8 3.5-3.7" style={{ stroke: 'var(--bg)' }} strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      )}
+      {status === 'dropped' && <path d="M5.1 5.1l3.8 3.8M8.9 5.1l-3.8 3.8" strokeLinecap="round" />}
+    </svg>
+  );
 }
 
 export function Avatar({ user, size, title }: { user: string | null | undefined; size?: number; title?: string }) {
