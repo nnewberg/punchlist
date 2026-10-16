@@ -36,6 +36,8 @@ function describe(status: number, data: unknown, board?: BoardRef): string {
   if (opError) {
     return opError.code === 'claimed' ? `${opError.message} (use --steal to take it over)` : opError.message;
   }
+  const errors = (data as { errors?: string[] } | null)?.errors;
+  if (errors?.length) return errors.join('\n');
   if (status === 401) return 'Not signed in. Run `punch login`.';
   if (status === 404 && board) return `No board for ${board.owner}/${board.repo}, or you don't have access to it.`;
   return typeof err.error === 'string' ? `${err.error} (HTTP ${status})` : `HTTP ${status}`;

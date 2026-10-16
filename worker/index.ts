@@ -1,4 +1,4 @@
-import type { Actor, Me, Op } from '../shared/types';
+import type { Actor, ImportFile, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
 import { BoardDO, refuseClientOp } from './board';
 import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
@@ -126,6 +126,19 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
       const last = results[results.length - 1]!;
       const status = last.ok ? 200 : last.error.code === 'not_found' ? 404 : 409;
       return json(Array.isArray(body) ? { ok: last.ok, results } : last, status);
+    }
+
+    // POST /import {items}: a repo's old tracking, translated into Punchlist items (§7.9). All or nothing.
+    if (rest[0] === 'import' && rest.length === 1 && request.method === 'POST') {
+      if (!trusted) return json({ error: 'forbidden' }, 403);
+      if (role !== 'edit') return forbidden(readOnly);
+      const body = (await request.json().catch(() => null)) as ImportFile | null;
+      if (!body || !Array.isArray(body.items)) return json({ ok: false, errors: ['Send {items: [...]}'] }, 400);
+      if (body.board && body.board.toLowerCase() !== `${info.owner}/${info.repo}`.toLowerCase()) {
+        return json({ ok: false, errors: [`This file is for ${body.board}, not ${info.owner}/${info.repo}.`] }, 400);
+      }
+      const out = await stub.importItems(info, body.items, actorFor(request, user));
+      return json(out, out.ok ? 200 : 409);
     }
 
     // POST /session {action}: a Claude session's hooks keep its claims alive, or release them when it ends (FR-24).

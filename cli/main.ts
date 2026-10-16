@@ -1,13 +1,14 @@
 import { spawn } from 'node:child_process';
-import { rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { resolveId, STATUS_LABEL } from '../shared/ops';
-import type { BoardEvent, Column, Me, MyWorkBoard, Op } from '../shared/types';
+import { checkImport } from '../shared/import';
+import type { BoardEvent, Column, ImportFile, Me, MyWorkBoard, Op } from '../shared/types';
 import { ApiError, boardPath, Client, flush, NetworkError, readBoard, write, type ApplyResult, type FlushReport } from './api';
 import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
-import { c, formatCompact, formatList, formatMine, formatShow } from './format';
+import { c, formatCompact, formatImportPlan, formatList, formatMine, formatShow } from './format';
 import { applyInit, planInit, pluginSettings } from './init';
 import { readHookInput, runHook } from './hooks';
 import { searchItems } from './search';
@@ -36,6 +37,7 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
   mine                          what's yours across every board
   open [ID]                     open the board in the browser
   export [-o file]              the board as JSON
+  import FILE [--yes]           add items from an import file, after a dry run (PRD §7.9)
   login [--start | --finish]    sign in with GitHub (--start/--finish: in two steps, for Claude)
   logout / whoami
   init                          point this repo's CLAUDE.md at the board
@@ -375,6 +377,35 @@ async function run() {
         return print(`Wrote ${snapshot.items.length} items to ${o.out}`);
       }
       return print(data);
+    }
+
+    case 'import': {
+      const path = need(args[0], 'an import file');
+      let file: ImportFile;
+      try {
+        file = JSON.parse(readFileSync(path, 'utf8')) as ImportFile;
+      } catch (e) {
+        throw new UsageError(`Can't read ${path} as JSON: ${(e as Error).message}`);
+      }
+      const b = o.board ? board() : file.board ? (parseBoardArg(file.board) ?? board()) : board();
+      const api = await client();
+      const { snapshot, offlineSince } = await readBoard(api, b);
+      if (offlineSince) throw new Error('Importing needs the server, and it can’t be reached.');
+      const plan = checkImport(snapshot.board.prefix, new Map(snapshot.items.map(i => [i.id, i])), file.items);
+      const name = `${b.owner}/${b.repo}`;
+      if (o.json && !o.yes) return printJson({ board: name, items: file.items.map((it, i) => ({ id: plan.ids[i], title: it.title, status: it.status, why: it.why })), errors: plan.errors });
+      if (!o.json) print(formatImportPlan(file.items, plan.ids, name));
+      if (plan.errors.length) throw new Error(`Can't import:\n${plan.errors.map(e => `  - ${e}`).join('\n')}`);
+      if (!o.yes) {
+        if (!process.stdin.isTTY) throw new UsageError('That was the dry run. Pass --yes to import.');
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await rl.question(`\nImport these ${file.items.length} items into ${name}? [y/N] `);
+        rl.close();
+        if (!/^y/i.test(answer.trim())) return print('Imported nothing.');
+      }
+      const out = await api.request<{ ok: true; ids: string[] }>('POST', `${boardPath(b)}/import`, { board: name, items: file.items }, b);
+      if (o.json) return printJson(out);
+      return print(`Imported ${out.ids.length} items into ${name}.`);
     }
 
     case 'init': {

@@ -24,6 +24,7 @@ punch list --compact   # the board for this repo, found from `origin`
 | `mine` | what's yours across every board |
 | `open [ID]` | open the board in the browser |
 | `export [-o file]` | the board as JSON |
+| `import FILE [--yes]` | add items from an import file (Punchlist's item shape, IDs kept), after a dry run |
 | `init` | point this repo's CLAUDE.md at the board |
 | `login [--start \| --finish]` | sign in with GitHub; in two steps with `--start` and `--finish` (how Claude does it) |
 | `logout` / `whoami` | |

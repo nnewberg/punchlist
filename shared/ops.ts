@@ -343,7 +343,7 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
 }
 
 /** `BT-030`, `bt-30` and `BT030` are the same item; so is any of its aliases. */
-const idKey = (ref: string) => {
+export const idKey = (ref: string) => {
   const m = /^([a-z]+)-?0*(\d+)([a-z]*)$/i.exec(ref.trim());
   return m ? `${m[1]!.toUpperCase()}-${m[2]}${m[3]!.toLowerCase()}` : ref.trim().toUpperCase();
 };

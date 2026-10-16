@@ -109,7 +109,36 @@ export type Op =
   /** Server-internal: field restore produced by `undo`. */
   | { op: 'restore'; id: string; fields: Partial<Item>; undoOf: number };
 
-export type OpName = Op['op'] | 'seed';
+export type OpName = Op['op'] | 'seed' | 'import';
+
+/**
+ * One item in an import file (PRD §7.9): Punchlist's own item shape, written by a one-time translation
+ * of a repo's old tracking. IDs are kept; one left out gets the next number after the highest imported.
+ */
+export interface ImportItem {
+  id?: string;
+  title: string;
+  body?: string;
+  status: Status;
+  tags?: string[];
+  depends_on?: string[];
+  /** Other names the item answers to, e.g. an ID that doesn't fit PREFIX-NNN (`BT-007a`). */
+  aliases?: string[];
+  blocked?: { reason: string } | null;
+  created_at?: string;
+  closed_at?: string;
+  /** Commits or PRs that finished it. */
+  citations?: { commit?: string; pr?: number; message?: string; at?: string }[];
+  notes?: { text: string; at?: string; commit?: string; pr?: number }[];
+  /** Why it lands in its column; shown in the dry run and kept in its history. */
+  why?: string;
+}
+
+export interface ImportFile {
+  /** owner/repo, checked against the board it's imported into. */
+  board?: string;
+  items: ImportItem[];
+}
 
 /** Display hints stored with an event (e.g. commit refs for seeded/GitHub history). */
 export interface EventMeta {
