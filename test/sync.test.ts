@@ -160,6 +160,15 @@ describe('pending on a branch (FR-31) — S6', () => {
     expect(it.citations).toMatchObject([{ kind: 'closes', commit: sha(11) }]);
   });
 
+  it('merging a PR with a pending fix closes the item in one event, without a separate link', async () => {
+    const r = await newRepo();
+    const id = await r.add('Empty profile crash');
+    await r.push('bugfix', [{ sha: sha(13), message: `Closes: ${id}` }]);
+    gh.prCommits[14] = [{ sha: sha(13), message: `Closes: ${id}`, author: 'nick' }];
+    await r.pr('closed', { number: 14, head: 'bugfix', merged: true, merge_commit_sha: sha(14) });
+    expect((await r.history(id)).map(e => e.meta?.text)).toEqual(['Closed by', 'Fix pending', 'Created']);
+  });
+
   it("an open PR's description adds a pending fix with its number", async () => {
     const r = await newRepo();
     const id = await r.add('Quiz nudge');
