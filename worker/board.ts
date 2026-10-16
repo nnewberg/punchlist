@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
-import { applyOp, columnItems, inversePatch } from '../shared/ops';
-import { CLIENT_SOURCES, SESSION_TTL_MS, type Actor, type BoardEvent, type BoardInfo, type ClientMsg, type EventMeta, type Item, type MyWorkBoard, type Op, type OpError, type Role, type ServerMsg, type Snapshot } from '../shared/types';
+import { checkImport, importedItem } from '../shared/import';
+import { applyOp, columnItems, idKey, inversePatch, rankFor, resolveId } from '../shared/ops';
+import { CLIENT_SOURCES, SESSION_TTL_MS, type Actor, type BoardEvent, type BoardInfo, type ClientMsg, type EventMeta, type ImportItem, type Item, type MyWorkBoard, type Op, type OpError, type Role, type ServerMsg, type Snapshot } from '../shared/types';
 import { ingest, type GhFacts } from './ingest';
 import { buildSeed } from './seed';
 
@@ -246,6 +247,39 @@ export class BoardDO extends DurableObject<Env> {
     return outcome;
   }
 
+  // ---- Import (PRD §7.9) ----
+
+  /**
+   * Writes an import file's items in one transaction, keeping their IDs, or writes nothing and says
+   * why. New items made afterwards are numbered after the highest imported one.
+   */
+  importItems(info: BoardInfo, specs: ImportItem[], actor: Actor): { ok: true; ids: string[] } | { ok: false; errors: string[] } {
+    this.ensure(info);
+    const plan = checkImport(this.info!.prefix, this.items, specs);
+    if (plan.errors.length) return { ok: false, errors: plan.errors };
+    const now = new Date().toISOString();
+    const pad = (n: number) => `${this.info!.prefix}-${String(n).padStart(3, '0')}`;
+    let ids: string[] = [];
+    this.ctx.storage.transactionSync(() => {
+      this.nextNum = Math.max(this.nextNum, plan.maxNum + 1);
+      ids = plan.ids.map(id => id ?? pad(this.nextNum++));
+      // Dependencies may name an imported item by an alias; store its ID.
+      const names = new Map<string, string>();
+      specs.forEach((s, i) => { for (const n of [ids[i]!, ...(s.aliases ?? [])]) names.set(idKey(n), ids[i]!); });
+      const depId = (d: string) => names.get(idKey(d)) ?? resolveId(this.items, d)?.id ?? d;
+      specs.forEach((spec, i) => {
+        const rank = rankFor(this.items.values(), spec.status, null);
+        const it = importedItem({ ...spec, depends_on: (spec.depends_on ?? []).map(depId) }, ids[i]!, actor, now, rank);
+        this.appendEvent('import', actor, now, null, it, { text: spec.why ? `Imported: ${spec.why}` : 'Imported' });
+        this.writeItem(it);
+      });
+      this.setMeta('next_num', String(this.nextNum));
+    });
+    // One resync instead of an event per item.
+    this.broadcast({ type: 'resync', snapshot: this.snapshot(this.info!) });
+    return { ok: true, ids };
+  }
+
   // ---- Claude sessions (FR-24, FR-28) ----
 
   /**
@@ -354,7 +388,7 @@ export class BoardDO extends DurableObject<Env> {
     return { ok: true, event, item: res.after };
   }
 
-  private appendEvent(op: Op['op'], actor: Actor, ts: string, before: Item | null, after: Item, meta: EventMeta): BoardEvent {
+  private appendEvent(op: Op['op'] | 'import', actor: Actor, ts: string, before: Item | null, after: Item, meta: EventMeta): BoardEvent {
     this.seq += 1;
     this.sql.exec(
       `INSERT INTO events (seq, ts, item_id, op, actor, before, after, meta, undoable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,

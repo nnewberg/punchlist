@@ -1,6 +1,6 @@
 {
   "name": "@nnewberg/punchlist",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "punch: the command line for Punchlist, a live shared TODO board for each repo",
   "license": "UNLICENSED",
   "type": "module",

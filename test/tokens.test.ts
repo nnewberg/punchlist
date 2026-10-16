@@ -120,6 +120,20 @@ describe('ops from the CLI', () => {
     expect((await call(`${path}/session`, { method: 'POST', token, body: JSON.stringify({ action: 'end' }) })).status).toBe(400);
   });
 
+  it('can import a file of items, but only into the board it names, and not as a viewer', async () => {
+    await setup();
+    const token = await cliToken();
+    const items = [{ id: 'BT-905', title: 'Quiz resume hardening', status: 'up_next' }]; // above what other tests create here
+    const wrong = await call(`${path}/import`, { method: 'POST', token, body: JSON.stringify({ board: 'nnewberg/bulletin-bee', items }) });
+    expect(wrong.status).toBe(400);
+    const ok = await call(`${path}/import`, { method: 'POST', token, body: JSON.stringify({ board: 'futureleisurefoundation/big-talk', items }) });
+    expect(await ok.json()).toEqual({ ok: true, ids: ['BT-905'] });
+    const again = await call(`${path}/import`, { method: 'POST', token, body: JSON.stringify({ items }) });
+    expect(again.status).toBe(409);
+    const viewer = await call('/v1/boards/nnewberg/bulletin-bee/import', { method: 'POST', token, body: JSON.stringify({ items: [{ title: 'x', status: 'backlog' }] }) });
+    expect(viewer.status).toBe(403);
+  });
+
   it('can be sent as a batch that stops at the first refusal', async () => {
     await setup();
     const token = await cliToken();

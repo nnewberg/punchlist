@@ -1,7 +1,7 @@
 import { age, isRecentDone, openDeps } from '../shared/derive';
 import { shortSha } from '../shared/github';
 import { columnItems, STATUS_LABEL } from '../shared/ops';
-import type { BoardEvent, Item, MyWorkBoard, Snapshot, Status } from '../shared/types';
+import type { BoardEvent, ImportItem, Item, MyWorkBoard, Snapshot, Status } from '../shared/types';
 
 // How the board reads in a terminal. `formatList` is for people; `formatCompact` is the agent view
 // (FR-18): everything Claude needs at the start of a session in about 1,500 tokens.
@@ -163,4 +163,20 @@ export function formatMine(boards: MyWorkBoard[]): string {
     out.push('');
   }
   return out.join('\n').trimEnd() || 'No boards.';
+}
+
+/** `punch import`'s dry run: each item, by the column it lands in, with why. */
+export function formatImportPlan(items: ImportItem[], ids: (string | null)[], board: string): string {
+  const out = [c.bold(`Import into ${board}: ${items.length} items`)];
+  for (const s of [...ORDER, 'dropped' as const]) {
+    const rows = items.map((it, i) => ({ it, id: ids[i] })).filter(r => r.it.status === s);
+    if (!rows.length) continue;
+    out.push('', `${c.bold(STATUS_LABEL[s])} ${c.dim(String(rows.length))}`);
+    for (const { it, id } of rows) {
+      const aka = it.aliases?.length ? c.dim(` (also ${it.aliases.join(', ')})`) : '';
+      out.push(`  ${c.dim((id ?? 'new').padEnd(8))} ${clip(it.title, 70)}${aka}`);
+      if (it.why) out.push(`  ${' '.repeat(8)} ${c.dim(clip(it.why, 110))}`);
+    }
+  }
+  return out.join('\n');
 }

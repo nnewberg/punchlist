@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import type { BoardInfo } from '../shared/types';
+import type { BoardInfo, ImportItem } from '../shared/types';
 
 const info: BoardInfo = { owner: 'nnewberg', repo: 'punchlist', prefix: 'PL' };
 const nick = { user: 'nick', via: 'web' as const };
@@ -113,5 +113,54 @@ describe('Claude session claims (FR-24, FR-28)', () => {
     const { id } = await claimed(b, 'branch');
     await b.apply(info, { op: 'claim', id, kind: 'branch', ref: `nick/${id}` }, { user: 'nick', via: 'github' });
     expect(await b.expireClaims(Date.now() + 10 * HOUR)).toBe(0);
+  });
+});
+
+describe('import (PRD §7.9)', () => {
+  const bt: BoardInfo = { owner: 'acme', repo: 'talk', prefix: 'BT' }; // not a seeded sample board
+  const items: ImportItem[] = [
+    { id: 'BT-001', title: 'Glanceable openers', status: 'done', closed_at: '2026-08-06T00:00:00Z', citations: [{ commit: '44f9d9c', message: 'BT-001: the title is the opener' }], why: 'merged in 44f9d9c' },
+    { id: 'BT-036', title: 'Continue the quiz', status: 'up_next', aliases: ['BT-007a'], depends_on: ['BT-001'] },
+    { id: 'BT-035', title: 'Pre-event blast', status: 'in_progress', notes: [{ text: 'Scheduling not started' }], why: 'generator built' },
+    { title: 'Bump the deploy Action off Node 20', status: 'backlog', depends_on: ['bt-7a'] },
+  ];
+
+  it('keeps the IDs, numbers new items after the highest, and records why', async () => {
+    const b = stub();
+    const out = await b.importItems(bt, items, nick);
+    expect(out).toEqual({ ok: true, ids: ['BT-001', 'BT-036', 'BT-035', 'BT-037'] });
+    const snap = await b.snapshot(bt);
+    const get = (id: string) => snap.items.find(i => i.id === id)!;
+    expect(get('BT-001')).toMatchObject({ status: 'done', closed_at: '2026-08-06T00:00:00Z', source: { kind: 'import' } });
+    expect(get('BT-001').citations[0]).toMatchObject({ kind: 'closes', commit: '44f9d9c', how: 'manual' });
+    expect(get('BT-035')).toMatchObject({ status: 'in_progress', claim: null });
+    expect(get('BT-037').depends_on).toEqual(['BT-036']);
+    expect((await b.history(bt, 'BT-001'))[0]!.meta?.text).toBe('Imported: merged in 44f9d9c');
+    const next = await b.apply(bt, { op: 'create', title: 'after the import' }, nick);
+    expect(next.ok && 'event' in next && next.item.id).toBe('BT-038');
+  });
+
+  it('an alias finds its item', async () => {
+    const b = stub();
+    await b.importItems(bt, items, nick);
+    const out = await b.apply(bt, { op: 'note', id: 'BT-007a', text: 'still wanted' }, nick);
+    expect(out.ok && out.item.id).toBe('BT-036');
+  });
+
+  it('writes nothing if any item clashes with the board', async () => {
+    const b = stub();
+    await b.apply(bt, { op: 'create', title: 'made before the import' }, nick); // BT-001
+    const out = await b.importItems(bt, items, nick);
+    expect(out.ok).toBe(false);
+    expect(!out.ok && out.errors.join(' ')).toMatch(/BT-001 is already/);
+    expect((await b.snapshot(bt)).items).toHaveLength(1);
+  });
+
+  it('an import can be undone item by item', async () => {
+    const b = stub();
+    await b.importItems(bt, items, nick);
+    const [ev] = await b.history(bt, 'BT-035');
+    const out = await b.apply(bt, { op: 'undo', seq: ev!.seq }, nick);
+    expect(out.ok && 'event' in out && out.item.status).toBe('dropped');
   });
 });

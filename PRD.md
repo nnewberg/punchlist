@@ -368,6 +368,12 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 - Fields that Punchlist has no concept of are dropped or folded into the body.
 - Review happens on a single table before anything is written: ID, title, proposed status and column, and a one-line reason for each status call. It's shared with the other people on the repo.
 - The per-repo rules below are guidance for the translation, not features of `punch import`.
+- **The file** (built 2026-10-16) is `{board, items: [...]}`, and each item is written in Punchlist's own shape:
+  - Fields: `id`, `title`, `body`, `status`, `tags`, `depends_on`, `aliases`, `blocked`, `created_at`, `closed_at`, `citations` (commits or PRs that finished it), `notes`, and `why`, the reason for the status call.
+  - `why` is shown in the dry run and kept in the item's history as "Imported: …".
+  - An item without an `id` is numbered after the highest imported one, and so is everything added later.
+  - The whole file is refused, with nothing written, if any ID or alias clashes with the board, has the wrong prefix, or depends on an unknown item.
+  - Each item is one undoable `import` event. Claims are never imported; they're live state.
 
 - **FR-36 big-talk:**
   - `docs/tickets/BT-*.md` → items
@@ -457,6 +463,7 @@ Automated syncing comes **before** any import. An imported board without auto-cl
    - Evaluated against big-talk's real git history and its ticket set.
    - That same run proposes fixes to big-talk's stale statuses (FR-38), so drift reconciliation uses the real feature rather than a one-off.
 4. **Imports (M5)**, with all of the above switched on from day one (§7.9).
+   - big-talk's import ran before step 3 (Nick's call, 2026-10-16). Its board was empty, so any item added while trying the plugin there would have become BT-001 and collided with the real ticket of that number. The drift fixes FR-38 calls for were made by judgment in the translation, using the git history; step 3 can still propose more.
 
 The sandbox runs on the production Worker, not a staging copy. Boards are isolated from each other, so this is fine at this scale and saves running a second deployment and App.
 

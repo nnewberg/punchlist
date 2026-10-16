@@ -14,7 +14,9 @@ A shared, live TODO board for each repo that keeps itself up to date. See [PRD.m
   - claims what it works on, and won't take what someone else holds
   - files work it leaves for later
 
-**Not built yet:** `punch import`, and inferred closes.
+- `punch import`: a repo's old tracking, translated once into Punchlist's item shape, imported after a dry run with its IDs kept.
+
+**Not built yet:** inferred closes.
 
 ## Using it with Claude Code
 
