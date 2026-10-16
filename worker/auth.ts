@@ -144,7 +144,13 @@ export async function handleAuth(request: Request, env: Env, ctx: ExecutionConte
 
   if (url.pathname === '/auth/device/start' && request.method === 'POST') {
     if (!githubConfigured(env)) return json({ error: 'GitHub sign-in isn’t set up on this server.' }, 503);
-    const d = await startDeviceFlow(env);
+    let d;
+    try {
+      d = await startDeviceFlow(env);
+    } catch (e) {
+      console.error(e);
+      return json({ error: (e as Error).message }, 503);
+    }
     return json({ user_code: d.user_code, verification_uri: d.verification_uri, handle: d.device_code, interval: d.interval, expires_in: d.expires_in });
   }
 

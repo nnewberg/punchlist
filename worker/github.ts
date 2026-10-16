@@ -150,7 +150,10 @@ async function githubForm<T>(url: string, body: Record<string, string>): Promise
     headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'punchlist' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new GitHubError(res.status, `GitHub ${url}: ${res.status}`);
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string; error_description?: string };
+    throw new GitHubError(res.status, err.error === 'device_flow_disabled' ? 'Device sign-in is turned off for the Punchlist GitHub App (Settings → Enable Device Flow).' : (err.error_description ?? `GitHub ${url}: ${res.status}`));
+  }
   return (await res.json()) as T;
 }
 

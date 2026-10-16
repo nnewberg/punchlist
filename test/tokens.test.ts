@@ -38,6 +38,13 @@ describe('device-flow login', () => {
     expect(row?.machine).toBe('nick-mbp');
   });
 
+  it('explains when device sign-in is off for the App', async () => {
+    gh.deviceDisabled = true;
+    const res = await call('/auth/device/start', { method: 'POST' });
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { error: string }).error).toMatch(/Enable Device Flow/);
+  });
+
   it('says so when the person cancels', async () => {
     gh.devicePolls = ['access_denied'];
     const start = (await (await call('/auth/device/start', { method: 'POST' })).json()) as { handle: string };
