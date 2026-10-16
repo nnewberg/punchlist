@@ -186,20 +186,18 @@ describe('pending on a branch (FR-31) — S6', () => {
 });
 
 describe('partial progress (FR-30) — S8', () => {
-  it('Refs and bare mentions on main add a dated note citing the commit, and never close', async () => {
+  it('Refs on main adds a dated note citing the commit, and never closes; a bare mention does nothing', async () => {
     const r = await newRepo();
     const id = await r.add('Thumbnails');
     gh.prOf[sha(20)] = 30;
     await r.push('main', [{ sha: sha(20), message: `Server half of thumbnails\n\nRefs: ${id}` }, { sha: sha(21), message: `Tidy, follow-up to ${id}` }]);
     const it = await r.item(id);
     expect(it.status).toBe('up_next');
-    expect(it.notes).toMatchObject([
-      { text: 'Server half of thumbnails', commit: sha(20), pr: 30, actor: 'nick', via: 'github' },
-      { text: `Tidy, follow-up to ${id}`, commit: sha(21) },
-    ]);
+    expect(it.notes).toMatchObject([{ text: 'Server half of thumbnails', commit: sha(20), pr: 30, actor: 'nick', via: 'github' }]);
+    expect(it.notes).toHaveLength(1);
   });
 
-  it('mentions on a feature branch wait until they land', async () => {
+  it('Refs on a feature branch waits until it lands', async () => {
     const r = await newRepo();
     const id = await r.add('Thumbnails');
     await r.push('feature', [{ sha: sha(22), message: `Refs: ${id}` }]);

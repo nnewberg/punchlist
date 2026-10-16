@@ -124,7 +124,8 @@ export function ingest(host: IngestHost, f: GhFacts) {
         }
         const closed = resolve(r.closes);
         for (const it of closed) close(current(it.id), { commit: c.sha, ...(pr ? { pr } : {}), branch: f.branch, how: 'explicit', ...(c.author ? { author: c.author } : {}), message: msg }, actor);
-        for (const it of resolve([...r.refs, ...r.mentions])) {
+        // Only `Refs:` / `Part of` adds a note. A bare mention is just a mention (decided 2026-10-16).
+        for (const it of resolve(r.refs)) {
           if (closed.some(x => x.id === it.id)) continue;
           host.apply({ op: 'note', id: it.id, text: msg, commit: c.sha, ...(pr ? { pr } : {}) }, actor);
         }
