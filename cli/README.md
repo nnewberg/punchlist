@@ -13,7 +13,8 @@ punch list --compact   # the board for this repo, found from `origin`
 |---|---|
 | `list [--compact] [--status s] [--mine] [--all]` | the board; `--compact` is the agent view |
 | `show ID` | one item, with notes and history |
-| `add "title" [-b body] [-s status] [-t tag]` | add an item |
+| `add "title" [-b body] [-s status] [-t tag] [--deferred]` | add an item; `--deferred` marks work Claude left for later |
+| `search "words"` | the closest items, including Done in the last 30 days (the duplicate check) |
 | `move ID status [--top \| --before ID]` | move it |
 | `start ID [--steal]` / `release ID` | claim it, or give it back |
 | `block ID reason` / `unblock ID` | |
@@ -24,10 +25,12 @@ punch list --compact   # the board for this repo, found from `origin`
 | `open [ID]` | open the board in the browser |
 | `export [-o file]` | the board as JSON |
 | `init` | point this repo's CLAUDE.md at the board |
-| `login` / `logout` / `whoami` | |
+| `login [--start \| --finish]` | sign in with GitHub; in two steps with `--start` and `--finish` (how Claude does it) |
+| `logout` / `whoami` | |
+| `hook session-start \| heartbeat \| session-end` | run by the Claude Code plugin's hooks |
 
 - Every command takes `--json`, and `--board owner/repo` to work outside a clone.
 - IDs can be typed loosely: `bt-30` is `BT-030`.
-- **Agents:** set `PUNCH_SESSION=<id>` (or pass `--session`), and changes are recorded as that Claude session.
+- **Agents:** set `PUNCH_SESSION=<id>` (or pass `--session`), and changes are recorded as that Claude session. The Claude Code plugin does this for you. A claim made in a session lasts while the session's hooks keep sending heartbeats, and lapses 2 hours after the last one.
 - **Offline:** reads use the last copy of the board, and changes wait in an outbox until the next command can send them.
 - **Token storage:** in the OS keychain, or in a private file where there's no keychain. `PUNCH_HOME` moves config, cache and token, for example to be a second person in another shell.

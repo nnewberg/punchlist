@@ -35,3 +35,15 @@ export function applyInit(plan: InitPlan) {
   const sep = current === '' ? '' : current.endsWith('\n\n') ? '' : current.endsWith('\n') ? '\n' : '\n\n';
   writeFileSync(plan.path, `${current}${sep}${plan.lines.join('\n')}\n`);
 }
+
+/** What a repo commits to `.claude/settings.json` so Claude Code offers teammates the plugin (FR-25a). */
+export function pluginSettings(): string {
+  return JSON.stringify(
+    {
+      extraKnownMarketplaces: { punchlist: { source: { source: 'github', repo: 'nnewberg/punchlist' }, autoUpdate: true } },
+      enabledPlugins: { 'punchlist@punchlist': true },
+    },
+    null,
+    2,
+  );
+}

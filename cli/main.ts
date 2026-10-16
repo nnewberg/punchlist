@@ -1,13 +1,16 @@
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { resolveId, STATUS_LABEL } from '../shared/ops';
 import type { BoardEvent, Column, Me, MyWorkBoard, Op } from '../shared/types';
 import { ApiError, boardPath, Client, flush, NetworkError, readBoard, write, type ApplyResult, type FlushReport } from './api';
-import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, saveConfig, setToken } from './config';
+import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
 import { c, formatCompact, formatList, formatMine, formatShow } from './format';
-import { applyInit, planInit } from './init';
+import { applyInit, planInit, pluginSettings } from './init';
+import { readHookInput, runHook } from './hooks';
+import { searchItems } from './search';
 import { parseStatus, UsageError } from './args';
 import { boardFromCwd, parseBoardArg, repoRoot, type BoardRef } from './repo';
 
@@ -20,7 +23,8 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
 
   list [--compact] [--status s] [--mine] [--all]   the board (--compact: the agent view)
   show ID                       one item, with notes and history
-  add "title" [-b body] [-s status] [-t tag]...   add an item (default: Backlog)
+  add "title" [-b body] [-s status] [-t tag]... [--deferred]   add an item (default: Backlog)
+  search "words"                the closest items, Done ones from the last 30 days too
   move ID status [--top | --before ID]             move it (backlog, next, progress, done)
   start ID [--steal]            claim it and move it to In Progress
   release ID                    give it back
@@ -32,11 +36,14 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
   mine                          what's yours across every board
   open [ID]                     open the board in the browser
   export [-o file]              the board as JSON
-  login / logout / whoami
+  login [--start | --finish]    sign in with GitHub (--start/--finish: in two steps, for Claude)
+  logout / whoami
   init                          point this repo's CLAUDE.md at the board
+  hook EVENT                    run by the Claude Code plugin: session-start, heartbeat, session-end
 
 IDs can be typed loosely: bt-30, BT-030 and BT030 are the same item.
-Set PUNCH_SESSION (or --session) when an agent runs punch, so changes record the session.`;
+Set PUNCH_SESSION (or --session) when an agent runs punch, so changes record the session.
+--deferred marks an item as work Claude left for later.`;
 
 const { values: o, positionals } = (() => {
   try {
@@ -63,6 +70,9 @@ const { values: o, positionals } = (() => {
         yes: { type: 'boolean', short: 'y' },
         out: { type: 'string', short: 'o' },
         dev: { type: 'string' },
+        deferred: { type: 'boolean' },
+        start: { type: 'boolean' },
+        finish: { type: 'boolean' },
       },
     });
   } catch (e) {
@@ -146,6 +156,61 @@ const said = (verb: string) => (results: ApplyResult[]) => {
   return noop ? c.dim(`${it.id} was already ${STATUS_LABEL[it.status]}: nothing changed.`) : `${verb} ${c.bold(it.id)} ${it.title} ${c.dim(`(${STATUS_LABEL[it.status]})`)}`;
 };
 
+// ---- Signing in (FR-3, FR-25a) ----
+
+/**
+ * A GitHub device-flow sign-in waiting for its code to be entered. Kept on disk so that Claude can
+ * start one, show the person the code, and finish it in a second command.
+ */
+interface PendingLogin {
+  url: string;
+  handle: string;
+  user_code: string;
+  verification_uri: string;
+  interval: number;
+  expires_at: number;
+}
+
+const pendingFile = () => join(configDir(), 'login-pending.json');
+
+async function startLogin(): Promise<PendingLogin> {
+  const start = await new Client({ url, token: null }).request<{ user_code: string; verification_uri: string; handle: string; interval: number; expires_in: number }>('POST', '/auth/device/start');
+  const pending: PendingLogin = { url, handle: start.handle, user_code: start.user_code, verification_uri: start.verification_uri, interval: start.interval, expires_at: Date.now() + start.expires_in * 1000 };
+  writeJson(pendingFile(), pending, 0o600);
+  openBrowser(start.verification_uri);
+  return pending;
+}
+
+async function finishLogin(pending: PendingLogin | null): Promise<string> {
+  if (!pending || pending.url !== url) throw new UsageError('No sign-in in progress. Run `punch login --start` first.');
+  const anon = new Client({ url, token: null });
+  let interval = pending.interval;
+  for (;;) {
+    if (Date.now() > pending.expires_at) {
+      rmSync(pendingFile(), { force: true });
+      throw new Error('The code expired. Run `punch login` again.');
+    }
+    await new Promise(r => setTimeout(r, interval * 1000));
+    try {
+      const r = await anon.request<{ status: string; token?: string; user?: string; interval?: number }>('POST', '/auth/device/poll', { handle: pending.handle, machine: machine() });
+      if (r.status === 'ok' && r.token && r.user) {
+        rmSync(pendingFile(), { force: true });
+        return signedIn(r.token, r.user);
+      }
+      if (r.interval) interval = r.interval;
+    } catch (e) {
+      if (e instanceof ApiError) throw new Error((e.data as { message?: string } | null)?.message ?? e.message);
+      throw e;
+    }
+  }
+}
+
+async function signedIn(token: string, user: string): Promise<string> {
+  const where = await setToken(url, token);
+  saveConfig({ ...loadConfig(), ...(url !== DEFAULT_URL || loadConfig().url ? { url } : {}), user, machine: machine() });
+  return `Signed in as ${c.bold(user)}${url === DEFAULT_URL ? '' : ` on ${url}`}. ${c.dim(where === 'keychain' ? 'Token saved in your keychain.' : `No keychain here, so the token is in a private file in ${configDir()}.`)}`;
+}
+
 // ---- Commands ----
 
 async function run() {
@@ -154,39 +219,20 @@ async function run() {
 
   switch (cmd) {
     case 'login': {
-      const machineName = machine();
-      let token: string;
-      let user: string;
-      const anon = new Client({ url, token: null });
       if (o.dev) {
-        ({ token, user } = await anon.request<{ token: string; user: string }>('POST', '/auth/dev-token', { as: o.dev, machine: machineName }));
-      } else {
-        const start = await anon.request<{ user_code: string; verification_uri: string; handle: string; interval: number; expires_in: number }>('POST', '/auth/device/start');
-        print(`To sign in, enter this code on GitHub: ${c.bold(start.user_code)}`);
-        print(`  ${start.verification_uri}`);
-        openBrowser(start.verification_uri);
-        let interval = start.interval;
-        const deadline = Date.now() + start.expires_in * 1000;
-        for (;;) {
-          if (Date.now() > deadline) throw new Error('The code expired. Run `punch login` again.');
-          await new Promise(r => setTimeout(r, interval * 1000));
-          try {
-            const r = await anon.request<{ status: string; token?: string; user?: string; interval?: number }>('POST', '/auth/device/poll', { handle: start.handle, machine: machineName });
-            if (r.status === 'ok' && r.token && r.user) {
-              token = r.token;
-              user = r.user;
-              break;
-            }
-            if (r.interval) interval = r.interval;
-          } catch (e) {
-            if (e instanceof ApiError) throw new Error((e.data as { message?: string } | null)?.message ?? e.message);
-            throw e;
-          }
-        }
+        const anon = new Client({ url, token: null });
+        const { token, user } = await anon.request<{ token: string; user: string }>('POST', '/auth/dev-token', { as: o.dev, machine: machine() });
+        return print(await signedIn(token, user));
       }
-      const where = await setToken(url, token);
-      saveConfig({ ...loadConfig(), ...(url !== DEFAULT_URL || loadConfig().url ? { url } : {}), user, machine: machineName });
-      return print(`Signed in as ${c.bold(user)}${url === DEFAULT_URL ? '' : ` on ${url}`}. ${c.dim(where === 'keychain' ? 'Token saved in your keychain.' : `No keychain here, so the token is in a private file in ${configDir()}.`)}`);
+      if (o.finish) return print(await finishLogin(readJson<PendingLogin>(pendingFile())));
+      const pending = await startLogin();
+      if (o.start) {
+        if (o.json) return printJson({ user_code: pending.user_code, verification_uri: pending.verification_uri, expires_at: pending.expires_at });
+        return print(`Enter ${c.bold(pending.user_code)} at ${pending.verification_uri} (opened in your browser), then run \`punch login --finish\`.`);
+      }
+      print(`To sign in, enter this code on GitHub: ${c.bold(pending.user_code)}`);
+      print(`  ${pending.verification_uri}`);
+      return print(await finishLogin(pending));
     }
 
     case 'logout': {
@@ -212,7 +258,7 @@ async function run() {
       const { snapshot, offlineSince } = await readBoard(api, b);
       if (offlineSince) info(c.yellow(`Offline: showing the board as of ${new Date(offlineSince).toLocaleString()}.`));
       if (o.json) return printJson(snapshot);
-      if (o.compact) return print(formatCompact(snapshot));
+      if (o.compact) return print(formatCompact(snapshot, { me: loadConfig().user, session }));
       return print(formatList(snapshot, { ...(o.status ? { status: parseStatus(o.status) } : {}), ...(o.mine ? { mine: loadConfig().user } : {}), all: !!o.all }));
     }
 
@@ -234,8 +280,19 @@ async function run() {
       const title = need(args.join(' '), 'a title');
       const status = o.status ? parseStatus(o.status) : 'backlog';
       if (status === 'dropped') throw new UsageError('New items can’t start deleted.');
-      const op: Op = { op: 'create', title, status: status as Column, ...(o.body ? { body: o.body } : {}), ...(o.tag?.length ? { tags: o.tag } : {}) };
+      const op: Op = { op: 'create', title, status: status as Column, ...(o.body ? { body: o.body } : {}), ...(o.tag?.length ? { tags: o.tag } : {}), ...(o.deferred ? { source: 'claude-deferred' as const } : {}) };
       return change(`add "${title}"`, [op], said('Added'));
+    }
+
+    case 'search':
+    case 'find': {
+      const query = need(args.join(' '), 'some words to look for');
+      const { snapshot, offlineSince } = await readBoard(await client(), board());
+      if (offlineSince) info(c.yellow(`Offline: searching the board as of ${new Date(offlineSince).toLocaleString()}.`));
+      const found = searchItems(snapshot.items, query);
+      if (o.json) return printJson({ matches: found.map(m => ({ score: m.score, item: m.item })) });
+      if (!found.length) return print(c.dim(`Nothing on the board matches "${query}".`));
+      return print(found.map(m => `${c.dim(m.item.id.padEnd(8))} ${m.item.title}  ${c.dim(`${STATUS_LABEL[m.item.status]} · ${Math.round(m.score * 100)}% of the words`)}`).join('\n'));
     }
 
     case 'move': {
@@ -338,7 +395,20 @@ async function run() {
         if (!/^y/i.test(answer.trim())) return print('Left CLAUDE.md alone.');
       }
       applyInit(plan);
-      return print(`Added the board pointer to ${plan.path}. Commit it when you're ready.`);
+      print(`Added the board pointer to ${plan.path}. Commit it when you're ready.`);
+      return print(`\nTo offer teammates the Claude Code plugin when they open this repo, commit this to .claude/settings.json:\n${c.dim(pluginSettings())}`);
+    }
+
+    case 'hook': {
+      const event = need(args[0], 'a hook event');
+      const out = await runHook(event, await readHookInput(), {
+        url,
+        envFile: process.env.CLAUDE_ENV_FILE,
+        pluginRoot: process.env.CLAUDE_PLUGIN_ROOT,
+        pluginData: process.env.CLAUDE_PLUGIN_DATA,
+      });
+      if (out) print(out);
+      return;
     }
 
     default:
