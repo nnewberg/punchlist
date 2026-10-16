@@ -24,12 +24,22 @@ const ORDER: Status[] = ['in_progress', 'up_next', 'backlog', 'done'];
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const ago = (iso: string) => (age(iso) === 'now' ? 'just now' : `${age(iso)} ago`);
 
-/** Who holds it, and how: "aaron · branch bt-014-x", "nick · claude session 3f2a". */
-export function holder(it: Item): string | null {
+/** Who is reading: their login and Claude session, to mark what's theirs. */
+export interface Viewer {
+  me?: string;
+  session?: string;
+}
+
+/** Who holds it, and how: "aaron · branch bt-014-x", "nick · claude session 3f2a9c01", "nick (you) · this session". */
+export function holder(it: Item, v: Viewer = {}): string | null {
   const cl = it.claim;
   if (!cl) return null;
-  const how = cl.kind === 'branch' && cl.ref ? ` · branch ${cl.ref}` : cl.kind === 'session' ? ` · claude${cl.ref ? ` session ${cl.ref}` : ''}` : '';
-  return `${cl.user}${how}`;
+  const how =
+    cl.kind === 'branch' && cl.ref ? ` · branch ${cl.ref}`
+    : cl.kind === 'session' && v.session && cl.ref === v.session ? ' · this session'
+    : cl.kind === 'session' ? ` · claude${cl.ref ? ` session ${cl.ref.slice(0, 8)}` : ''}`
+    : '';
+  return `${cl.user}${v.me && cl.user === v.me ? ' (you)' : ''}${how}`;
 }
 
 function blockedWhy(it: Item, items: ReadonlyMap<string, Item>): string | null {
@@ -78,7 +88,7 @@ export function formatList(snap: Snapshot, opts: ListOptions = {}): string {
 }
 
 /** The agent's view of the board (FR-18): counts, who holds what, what's next, what's stuck. No Done. */
-export function formatCompact(snap: Snapshot): string {
+export function formatCompact(snap: Snapshot, viewer: Viewer = {}): string {
   const items = new Map(snap.items.map(i => [i.id, i]));
   const col = (s: Status) => columnItems(snap.items, s);
   const inProgress = col('in_progress');
@@ -97,7 +107,7 @@ export function formatCompact(snap: Snapshot): string {
     for (const it of list.slice(0, max)) out.push(`- ${fmt(it)}`);
     if (list.length > max) out.push(`- … ${list.length - max} more (${more})`);
   };
-  section('In progress', inProgress, 20, i => `${t(i)} [${holder(i) ?? 'unclaimed'}]`, 'punch list --status in_progress');
+  section('In progress', inProgress, 20, i => `${t(i)} [${holder(i, viewer) ?? 'unclaimed'}]`, 'punch list --status in_progress');
   section('Up next (top first)', upNext, 15, i => t(i) + (blockedWhy(i, items) ? ' [blocked]' : ''), 'punch list --status up_next');
   section('Blocked', blocked, 10, i => `${i.id}: ${clip(blockedWhy(i, items)!, 100)}`, 'punch list');
   section('Backlog (top first)', backlog, 10, t, 'punch list --status backlog');

@@ -26,6 +26,8 @@ export interface ClientOptions {
   token: string | null;
   /** The agent session this command runs in, if any (FR-4): recorded on every change. */
   session?: string;
+  /** How long to wait for the server; hooks wait less than commands. */
+  timeoutMs?: number;
 }
 
 function describe(status: number, data: unknown, board?: BoardRef): string {
@@ -46,6 +48,10 @@ export class Client {
     return this.opts.url;
   }
 
+  get session() {
+    return this.opts.session;
+  }
+
   async request<T>(method: string, path: string, body?: unknown, board?: BoardRef): Promise<T> {
     const headers: Record<string, string> = { 'x-punch-via': this.opts.session ? 'claude' : 'cli' };
     if (this.opts.token) headers.authorization = `Bearer ${this.opts.token}`;
@@ -53,7 +59,7 @@ export class Client {
     if (body !== undefined) headers['content-type'] = 'application/json';
     let res: Response;
     try {
-      res = await fetch(`${this.opts.url}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
+      res = await fetch(`${this.opts.url}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(this.opts.timeoutMs ?? 15_000) });
     } catch (e) {
       throw new NetworkError(`Can't reach ${this.opts.url} (${(e as Error).message})`);
     }
