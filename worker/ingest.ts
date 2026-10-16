@@ -154,7 +154,7 @@ export function ingest(host: IngestHost, f: GhFacts) {
       const merge = f.mergeSha ?? undefined;
       const shas = [...(merge ? [merge] : []), ...f.commits.map(c => c.sha)];
       for (const sha of shas) host.rememberCommit(sha, { pr: f.number, merge: sha === merge });
-      each(it => (it.citations.some(c => c.commit && shas.includes(c.commit)) || it.notes.some(n => n.commit && shas.includes(n.commit)) ? { op: 'link_pr', id: it.id, pr: f.number, commits: shas } : null), actor);
+      each(it => (it.citations.some(c => c.kind === 'closes' && c.commit && shas.includes(c.commit)) || it.notes.some(n => n.commit && shas.includes(n.commit)) ? { op: 'link_pr', id: it.id, pr: f.number, commits: shas } : null), actor);
 
       const undid = revertedPr(f.body);
       if (undid != null || /^Revert "/.test(f.title)) {

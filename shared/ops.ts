@@ -279,7 +279,8 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
     case 'link_pr': {
       const shas = new Set(op.commits);
       let changed = false;
-      it.citations = it.citations.map(x => (x.commit && shas.has(x.commit) && x.pr !== op.pr ? ((changed = true), { ...x, pr: op.pr }) : x));
+      // Pending fixes are left alone: the merge either closes the item, which drops them, or ends their branch.
+      it.citations = it.citations.map(x => (x.kind === 'closes' && x.commit && shas.has(x.commit) && x.pr !== op.pr ? ((changed = true), { ...x, pr: op.pr }) : x));
       it.notes = it.notes.map(n => (n.commit && shas.has(n.commit) && n.pr !== op.pr ? ((changed = true), { ...n, pr: op.pr }) : n));
       if (!changed) return { ok: true, noop: true, item: cur };
       meta = { text: 'Linked to', ref: `PR #${op.pr}` };
