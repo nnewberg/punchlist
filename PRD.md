@@ -281,6 +281,13 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 - **FR-21 Skill (`punchlist`).** Tells Claude how to use the board. Every action goes through `punch` and never through files. Claude should:
   - **Add items:** when the user asks (S1), and when Claude defers work itself (S2). Check for near-duplicates first, and add a note to the existing item instead.
   - **Claim before substantial work.** If the item is already held by someone else, tell the user instead of starting.
+  - **Add notes on its own** (decided 2026-10-16) when it learns something a teammate would want to know: a root cause, a blocker, a decision, partial progress. Notes are append-only and never change status. Keep them sparse: a note or two per session, not a running log.
+  - **Leave decisions to people.** Only when asked does Claude:
+    - add items the user merely mentions
+    - close an item without a commit
+    - reprioritize, move or delete items
+    - edit other people's items
+    - take over someone else's claim
   - **Use trailers when asked to commit:** `Closes: <IDs>` for work that finishes an item, `Refs: <IDs>` for partial progress.
   - **Never commit, push or branch just to update the board.** Board writes don't need git.
   - **Tell the board apart from Claude Code's own task list.** When the user says "todo list", "todos" or "punchlist", they mean the shared board. Claude's internal per-session task list stays private scratch space and must never stand in for filing an item on the board.
