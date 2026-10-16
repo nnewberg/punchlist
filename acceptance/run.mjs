@@ -93,7 +93,17 @@ function openPr(head, title, body = '') {
   const url = gh('pr', 'create', '--repo', SANDBOX, '--base', 'main', '--head', head, '--title', title, '--body', body);
   return Number(/\/pull\/(\d+)/.exec(url)[1]);
 }
-const mergePr = (n, how) => gh('pr', 'merge', String(n), '--repo', SANDBOX, `--${how}`, '--delete-branch');
+/** Merges a PR. GitHub sometimes refuses a merge right after a PR opens ("Base branch was modified"), so it retries. */
+function mergePr(n, how) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return gh('pr', 'merge', String(n), '--repo', SANDBOX, `--${how}`, '--delete-branch');
+    } catch (e) {
+      if (attempt >= 4 || !/Base branch was modified|not mergeable|try the merge again/i.test(String(e.stderr))) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000 * attempt);
+    }
+  }
+}
 
 // ---- Scenarios ----
 
