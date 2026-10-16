@@ -1,6 +1,6 @@
 import type { Actor, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
-import { BoardDO, CLIENT_OPS } from './board';
+import { BoardDO, refuseClientOp } from './board';
 import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
 import { githubConfigured, verifyWebhook } from './github';
 import { resolveUser, type Identity } from './identity';
@@ -114,9 +114,8 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
       if (role !== 'edit') return forbidden(readOnly);
       const body = (await request.json().catch(() => null)) as Op | Op[] | null;
       const ops = Array.isArray(body) ? body : body ? [body] : [];
-      if (!ops.length || ops.length > 50 || ops.some(op => !op || !CLIENT_OPS.has(op.op))) {
-        return json({ ok: false, error: { code: 'invalid', message: 'Unsupported op' } }, 400);
-      }
+      const refused = !ops.length || ops.length > 50 ? 'Send 1 to 50 ops' : ops.map(refuseClientOp).find(Boolean);
+      if (refused) return json({ ok: false, error: { code: 'invalid', message: refused } }, 400);
       const actor = actorFor(request, user);
       const results = [];
       for (const op of ops) {
@@ -127,6 +126,18 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
       const last = results[results.length - 1]!;
       const status = last.ok ? 200 : last.error.code === 'not_found' ? 404 : 409;
       return json(Array.isArray(body) ? { ok: last.ok, results } : last, status);
+    }
+
+    // POST /session {action}: a Claude session's hooks keep its claims alive, or release them when it ends (FR-24).
+    if (rest[0] === 'session' && rest.length === 1 && request.method === 'POST') {
+      if (!trusted) return json({ error: 'forbidden' }, 403);
+      if (role !== 'edit') return forbidden(readOnly);
+      const actor = actorFor(request, user);
+      const { action } = ((await request.json().catch(() => null)) ?? {}) as { action?: string };
+      if (!actor.session || (action !== 'heartbeat' && action !== 'end')) {
+        return json({ ok: false, error: { code: 'invalid', message: 'Needs X-Punch-Session and an action of heartbeat or end' } }, 400);
+      }
+      return json({ ok: true, ...(await stub.session(info, { ...actor, user: user.login, session: actor.session }, action)) });
     }
 
     if (rest[0] === 'events' && request.method === 'GET') {

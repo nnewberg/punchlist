@@ -22,6 +22,12 @@ export interface Claim {
   heartbeat_at?: string;
 }
 
+/** How long a session claim lasts without a heartbeat from its Claude session (FR-28). */
+export const SESSION_TTL_MS = 2 * 3600_000;
+
+/** Where a client may say an item came from; the rest are set by the service. */
+export const CLIENT_SOURCES = ['chat', 'claude-deferred', 'cli'] as const;
+
 /**
  * A commit or PR that closes an item, or will once it merges (`pending`). Partial progress (`Refs:`)
  * and bare mentions are notes, not citations. `how: 'branch'` is a close inferred from a merged branch
@@ -81,7 +87,8 @@ export type Op =
   | { op: 'move'; id: string; status: Status; beforeId?: string | null }
   | { op: 'edit'; id: string; title?: string; body?: string; baseBodyVersion?: number }
   | { op: 'claim'; id: string; kind?: Claim['kind']; ref?: string; steal?: boolean }
-  | { op: 'release'; id: string }
+  /** `reason` replaces "Released" in the history, e.g. when a session ends or its claim lapses. */
+  | { op: 'release'; id: string; reason?: string }
   | { op: 'block'; id: string; reason: string }
   | { op: 'unblock'; id: string }
   | { op: 'note'; id: string; text: string; commit?: string; pr?: number }
