@@ -1,0 +1,20 @@
+{
+  "description": "Shows Claude the board at the start of a session, keeps the session's claims alive while it's in use, and releases them when it ends (Punchlist FR-24).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/punch hook session-start", "timeout": 120 }]
+      }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/punch hook heartbeat", "async": true }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/punch hook heartbeat", "async": true }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/punch hook session-end", "timeout": 10 }] }
+    ]
+  }
+}

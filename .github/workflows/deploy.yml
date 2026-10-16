@@ -24,6 +24,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
+      - name: Check the Claude Code plugin and marketplace
+        run: npx -y @anthropic-ai/claude-code@2.1.301 plugin validate .
       - name: Apply database migrations
         run: npx wrangler d1 migrations apply DB --remote --config wrangler.jsonc
         env:

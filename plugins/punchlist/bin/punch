@@ -1,0 +1,38 @@
+#!/bin/sh
+# The plugin's `punch`: runs the version of the CLI (@nnewberg/punchlist) this plugin was built for,
+# installing it into the plugin's data folder the first time. Claude Code runs it from the hooks, and
+# the SessionStart hook puts this folder first on the PATH of Claude's shell, with PUNCH_PLUGIN_DATA.
+# PUNCH_CLI points it at a CLI built from the punchlist repo instead, for development.
+set -e
+
+if [ -n "$PUNCH_CLI" ]; then exec node "$PUNCH_CLI" "$@"; fi
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+want=$(cat "$root/cli-version")
+data=${CLAUDE_PLUGIN_DATA:-$PUNCH_PLUGIN_DATA}
+
+if [ -n "$data" ]; then
+  cli="$data/cli/node_modules/@nnewberg/punchlist"
+  have=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$cli/package.json" 2>/dev/null | head -n 1)
+  if [ "$have" != "$want" ]; then
+    if ! command -v npm >/dev/null 2>&1; then
+      echo "punch: the Punchlist plugin needs Node.js 20 or later, and npm wasn't found." >&2
+      exit 1
+    fi
+    mkdir -p "$data/cli"
+    npm install --prefix "$data/cli" --no-save --no-audit --no-fund --loglevel=error "@nnewberg/punchlist@$want" >&2 || {
+      echo "punch: couldn't install @nnewberg/punchlist@$want." >&2
+      exit 1
+    }
+  fi
+  exec node "$cli/dist/punch.mjs" "$@"
+fi
+
+# Run outside Claude Code: use another punch on the PATH, if there is one.
+self="$root/bin/punch"
+IFS=:
+for dir in $PATH; do
+  if [ -x "$dir/punch" ] && [ "$(cd "$dir" && pwd)/punch" != "$self" ]; then exec "$dir/punch" "$@"; fi
+done
+echo "punch: not installed. Run: npm i -g @nnewberg/punchlist" >&2
+exit 1
