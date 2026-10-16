@@ -22,7 +22,7 @@ export const STATUS_LABEL: Record<Status, string> = {
   up_next: 'Up Next',
   in_progress: 'In Progress',
   done: 'Done',
-  dropped: 'Dropped',
+  dropped: 'Deleted',
 };
 
 const fail = (code: 'not_found' | 'invalid', message: string): ApplyResult => ({ ok: false, error: { code, message } });
@@ -240,7 +240,7 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
       if (it.status === 'dropped') return { ok: true, noop: true, item: cur };
       it.claim = null;
       setStatus(it, 'dropped', now);
-      meta = { text: 'Dropped' };
+      meta = { text: 'Deleted' };
       break;
     }
     case 'gh_close': {

@@ -6,17 +6,18 @@ import { STATUS_LABEL } from '../../shared/ops';
 import type { BoardEvent, BoardInfo, Item, OpError } from '../../shared/types';
 import { api, boardApi } from '../api';
 import type { BoardClient } from '../boardClient';
-import { Avatar, CloseIcon, Field, Glyph, InlineInput } from './ui';
+import { Avatar, CloseIcon, Field, Glyph, InlineInput, TrashIcon } from './ui';
 
 // Item detail, opened as a centered sheet (design 1b). Everything here is editable in place (FR-12),
 // with history and per-event undo from the event log (FR-15).
-export function DetailSheet({ item, items, board, client, onClose, onOpen }: {
+export function DetailSheet({ item, items, board, client, onClose, onOpen, onDeleted }: {
   item: Item;
   items: ReadonlyMap<string, Item>;
   board: BoardInfo;
   client: BoardClient;
   onClose: () => void;
   onOpen: (id: string) => void;
+  onDeleted: (id: string, seq: number) => void;
 }) {
   const [history, setHistory] = useState<BoardEvent[]>([]);
   const [adding, setAdding] = useState<null | 'tag' | 'block' | 'dep'>(null);
@@ -65,7 +66,20 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen }: {
           <span className="pill"><Glyph status={item.status} />{STATUS_LABEL[item.status]}</span>
           {(done || dropped) && <button className="btn-reopen" onClick={() => send({ op: 'reopen', id: item.id })}>Reopen</button>}
           <span style={{ flex: 1 }} />
-          {!dropped && <button className="btn-link" onClick={() => send({ op: 'drop', id: item.id })} title="Hide from the board; still searchable">Drop</button>}
+          {/* Nothing is destroyed (PRD §6.1): a deleted item leaves the board but stays searchable, and the toast can undo it. */}
+          {!dropped && (
+            <button
+              className="close-btn trash"
+              aria-label="Delete"
+              title="Delete"
+              onClick={() => {
+                onClose();
+                void client.send({ op: 'drop', id: item.id }).then(r => r.ok && r.seq && onDeleted(item.id, r.seq));
+              }}
+            >
+              <TrashIcon />
+            </button>
+          )}
           <button className="close-btn" onClick={onClose} aria-label="Close"><CloseIcon /></button>
         </div>
         <div className="sheet-body">

@@ -1,16 +1,15 @@
-import type { DragEvent } from 'react';
+import type { PointerEvent } from 'react';
 import { person } from '../../shared/config';
 import { latestNote, openDeps } from '../../shared/derive';
 import type { Item } from '../../shared/types';
 import { Avatar, BranchIcon } from './ui';
 
 export interface CardDnd {
-  dragging: boolean;
-  dropBefore: boolean;
-  onDragStart: (e: DragEvent) => void;
-  onDragEnd: () => void;
-  onDragOver: (e: DragEvent) => void;
-  onDrop: (e: DragEvent) => void;
+  /** Lifted: the card is being dragged, so its slot shows an empty dashed outline. */
+  lifted: boolean;
+  /** How far down to draw the card, to open a gap above it for the card being dragged. */
+  shift: number;
+  onPointerDown: (e: PointerEvent<HTMLElement>) => void;
 }
 
 // FR-13, laid out as in the design: the card names only the person working on an item, whether
@@ -32,18 +31,18 @@ export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
   const done = item.status === 'done';
 
   return (
-    <div className={`card-wrap${arrived ? ' arrived' : ''}${dnd?.dropBefore ? ' drop-before' : ''}`}>
+    <div
+      className={`card-wrap${arrived ? ' arrived' : ''}${dnd?.lifted ? ' lifted' : ''}`}
+      data-item={item.id}
+      style={dnd?.shift ? { translate: `0 ${dnd.shift}px` } : undefined}
+    >
       {caption && <div className="caption">{caption}</div>}
       <div
-        className={`card${dnd?.dragging ? ' dragging' : ''}`}
+        className="card"
         role="button"
         tabIndex={0}
         data-id={item.id}
-        draggable={!!dnd}
-        onDragStart={dnd?.onDragStart}
-        onDragEnd={dnd?.onDragEnd}
-        onDragOver={dnd?.onDragOver}
-        onDrop={dnd?.onDrop}
+        onPointerDown={dnd?.onPointerDown}
         onClick={onOpen}
         onKeyDown={e => e.key === 'Enter' && onOpen()}
       >
