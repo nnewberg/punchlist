@@ -17,6 +17,8 @@ export interface FakeGitHub {
   /** Device-flow polls answer with these in turn, then keep repeating the last. */
   devicePolls: string[];
   calls: string[];
+  /** GitHub refuses device codes, as it does until the App has Device Flow ticked. */
+  deviceDisabled?: boolean;
 }
 
 export const gh: FakeGitHub = { perms: {}, repos: [], devicePolls: [], calls: [] };
@@ -48,10 +50,12 @@ export function useProdWorker() {
     ];
     gh.devicePolls = ['authorization_pending', 'ok'];
     gh.calls = [];
+    gh.deviceDisabled = false;
     let poll = 0;
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
       gh.calls.push(`${init?.method ?? 'GET'} ${url.pathname}`);
+      if (url.pathname === '/login/device/code' && gh.deviceDisabled) return json({ error: 'device_flow_disabled', error_description: 'Device Flow must be explicitly enabled for this App' }, 400);
       if (url.pathname === '/login/device/code') return json({ device_code: 'dev-code', user_code: 'ABCD-1234', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 5 });
       if (url.pathname === '/login/oauth/access_token') {
         const body = JSON.parse(String(init?.body));
