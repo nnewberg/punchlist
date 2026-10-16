@@ -27,7 +27,9 @@ IDs can be typed loosely: `bt-14` is `BT-014`.
 Add an item when the user asks ("add X to the todo list", "put that on the punchlist"). Before adding, check for a duplicate:
 
 1. Run `punch search "<three to six key words>"`.
-2. If a match is clearly the same work, don't add. Run `punch note ID "<what's new>"` on it, then tell the user which item already covers it. That includes a recent Done item, if the work has come back.
+2. If a match is the same piece of work, don't add. Record the request as a note on it instead, so the board shows it came up again, with whatever it adds: who asked, why, how urgent, new detail. For example: `punch note ID "Asked again: invites are getting hammered"`. Then tell the user which item already covers it. That includes a recent Done item, if the work has come back.
+   - A similar topic isn't enough. "Rate-limit the invite endpoint" and "rate-limit the login endpoint" are two items, and so is the same fix for a different service, screen or scope.
+   - When you're unsure, add the new item and mention the similar one ("Added PS-41; PS-16 looks related").
 3. Otherwise run `punch add "<short imperative title>"`. Use `-b "<details>"` for context worth keeping, and `-s next` only if the user says it's next.
 
 Write titles the way a teammate would scan them: "Rate-limit the invite endpoint", not "the thing Nick mentioned".
@@ -36,7 +38,12 @@ Items the user merely mentions in passing ("we should probably also…") are the
 
 ## Work you leave for later
 
-When you decide to leave part of a task undone ("I'll leave the retry logic for later", or a follow-up you spot but don't do), file it, so it never vanishes:
+Work that's left undone for later must not vanish. File it when:
+- you leave part of a task undone ("I'll leave the retry logic for later")
+- you spot a follow-up and don't do it
+- the user says to leave part of what they asked for until later ("…but leave the README for later")
+
+File it like this:
 
 ```sh
 punch add --deferred "Retry failed uploads with backoff" -b "Left from <what you were doing>: <why>"

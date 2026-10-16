@@ -31,7 +31,7 @@ Requirements:
 
 | Part | What it does |
 |---|---|
-| `SessionStart` hook | Puts the house rules and the compact board into Claude's context. It also tells Claude's shell which session it is, so the board records each change as this session. |
+| `SessionStart` hook | Puts the house rules (`rules.md`) and the compact board into Claude's context. It also tells Claude's shell which session it is, so the board records each change as this session. |
 | `UserPromptSubmit` / `Stop` hooks | Keep this session's claims alive. They send at most one heartbeat every 5 minutes, in the background. |
 | `SessionEnd` hook | Releases this session's claims. If a session dies without it, its claims lapse after 2 hours. |
 | `punchlist` skill | How Claude uses the board: duplicate checks, claims, deferred work, notes, `Closes:` and `Refs:` trailers, sign-in. |
