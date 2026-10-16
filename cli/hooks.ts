@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Item } from '../shared/types';
 import { ApiError, boardPath, Client, NetworkError, readBoard } from './api';
@@ -9,7 +9,8 @@ import { boardFromCwd, type BoardRef } from './repo';
 // `punch hook <event>`: what the Claude Code plugin's hooks run (FR-24). Claude Code passes the
 // session as JSON on stdin. A hook never fails loudly: a broken board must not break a Claude session.
 // - session-start: tells Claude's shell its session (so its `punch` calls record it, FR-4), then
-//   prints the rules and the compact board into Claude's context (S10).
+//   prints the plugin's rules (its rules.md, so they change with the plugin, not the CLI) and the
+//   compact board into Claude's context (S10).
 // - heartbeat (UserPromptSubmit, Stop): keeps this session's claims alive, at most every 5 minutes.
 // - session-end: releases this session's claims (FR-28).
 
@@ -28,18 +29,18 @@ export interface HookEnv {
   pluginData?: string;
 }
 
-/** The rules Claude follows every session. The plugin's `punchlist` skill has the details. */
-export const RULES = `This repo's TODOs live on a shared Punchlist board that the whole team sees live. Use the \`punch\` CLI for it, never files; the punchlist skill has the details.
-- "todo list", "todos" and "punchlist" mean this board, not your own task list.
-- Before substantial work on an item, run \`punch start ID\`. If it says someone else (or your other session) has it, stop and tell the user; take it over only if they say so (\`--steal\`).
-- When asked to add something, run \`punch search "<a few words>"\` first. If it's already there, add a note to that item instead of a duplicate.
-- When you leave part of the work for later, file it with \`punch add --deferred "…"\` and say so in one line.
-- Add a note (\`punch note ID "…"\`) when you learn something a teammate would want: a root cause, a blocker, partial progress. A note or two per session, not a log.
-- When asked to commit, use a \`Closes: ID\` trailer for work that finishes an item and \`Refs: ID\` for partial progress. Never commit, push or branch just to update the board.
-- Leave decisions to people: close without a commit, move, reprioritize, delete or edit someone else's item only when asked.`;
-
 const HEARTBEAT_EVERY_MS = 5 * 60_000;
 const HOOK_TIMEOUT_MS = 4_000;
+
+/** The rules Claude follows every session, from the plugin. */
+function rules(env: HookEnv): string | null {
+  if (!env.pluginRoot) return null;
+  try {
+    return readFileSync(join(env.pluginRoot, 'rules.md'), 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
 
 const cleanSession = (s: string | undefined) => s?.replace(/[^\w.:-]/g, '').slice(0, 64) || undefined;
 const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -83,7 +84,8 @@ export async function sessionStart(input: HookInput, env: HookEnv): Promise<stri
   let held: Item[] | null = null;
   if (session && !read.offlineSince) held = await sessionCall(client, b, 'heartbeat').catch(() => null);
   const me = loadConfig().user;
-  const out = [RULES, '', formatCompact(read.snapshot, { me, session })];
+  const r = rules(env);
+  const out = [...(r ? [r, ''] : []), formatCompact(read.snapshot, { me, session })];
   if (read.offlineSince) out.push(`(Offline: this is the board as of ${read.offlineSince}. Changes you make are queued and sent when punch is back online.)`);
   if (me) out.push(`You are signed in as ${me}.${held?.length ? ` This session holds ${held.map(i => i.id).join(', ')}.` : ''}`);
   if (input.source === 'resume' && held && !held.length) {

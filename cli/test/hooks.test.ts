@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Item } from '../../shared/types';
 import { saveConfig, setToken } from '../config';
-import { RULES, runHook, stampFile } from '../hooks';
+import { runHook, stampFile } from '../hooks';
 
 // The Claude Code plugin's hooks (FR-24): what Claude sees at the start of a session, and the calls
 // that keep its claims alive and release them.
@@ -57,9 +57,12 @@ describe('session-start', () => {
     await signIn();
     const envFile = join(repo, 'env.sh');
     writeFileSync(envFile, '');
-    const out = await runHook('session-start', { session_id: 'sess-1', cwd: repo, source: 'startup' }, { url: URL_, envFile, pluginRoot: "/plugins/it's here", pluginData: '/data' });
-    expect(readFileSync(envFile, 'utf8')).toBe(`export PUNCH_SESSION='sess-1'\nexport PATH='/plugins/it'\\''s here/bin':"$PATH"\nexport PUNCH_PLUGIN_DATA='/data'\n`);
-    expect(out.startsWith(RULES)).toBe(true);
+    const root = join(mkdtempSync(join(tmpdir(), 'plugin-')), "it's here");
+    mkdirSync(root);
+    writeFileSync(join(root, 'rules.md'), 'Claim before you work.\n');
+    const out = await runHook('session-start', { session_id: 'sess-1', cwd: repo, source: 'startup' }, { url: URL_, envFile, pluginRoot: root, pluginData: '/data' });
+    expect(readFileSync(envFile, 'utf8')).toBe(`export PUNCH_SESSION='sess-1'\nexport PATH='${root.replace("'", "'\\''")}/bin':"$PATH"\nexport PUNCH_PLUGIN_DATA='/data'\n`);
+    expect(out.startsWith('Claim before you work.\n\nPunchlist nnewberg/punchlist-sandbox')).toBe(true);
     expect(out).toContain('PS-001 Geo filter [kevin · claude session aaaaaaaa]');
     expect(out).toContain('PS-002 Retry uploads [nick (you) · this session]');
     expect(out).toContain('You are signed in as nick. This session holds PS-002.');
