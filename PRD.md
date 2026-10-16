@@ -1,7 +1,7 @@
 # Punchlist — PRD
 
 - **Name:** Punchlist. CLI: `punch`. npm: `@nnewberg/punchlist`.
-- **Status:** v0.3. M1 and M2 are built and live at https://punchlist.nnewberg.workers.dev. The build order for M3–M5 was revised (§9). What was decided while building is in §12.
+- **Status:** v0.4. M1 and M2 are built and live at https://punchlist.nnewberg.workers.dev, and M4's deterministic GitHub sync is built (§9.1 step 1). What was decided while building is in §12.
 - **Date:** 2026-10-16 (v0.2: 2026-10-14)
 - **Owner:** Nick
 - **Source:** [Agentic TODOs Brainstorm.md](Agentic%20TODOs%20Brainstorm.md) (voice memo), plus follow-up decisions
@@ -321,7 +321,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 - **FR-27 One holder per item.** A claim on an item that is already held fails and names the current holder. The holder can be overridden with `--steal`, which is recorded in the log.
 - **FR-28 Claim lifetime:**
   - Session claims expire after a TTL with no heartbeat (default 2 hours).
-  - Branch claims end when the branch is deleted or merged.
+  - Branch claims end when the branch is deleted or merged. A merged branch named for an item closes it (`how: branch`) unless the branch's commits or PR say `Refs:` for it, which marks partial progress (§12).
   - Manual claims last until they are released.
   - When a claim ends without a close, the item goes back to the column it was in before.
 
@@ -334,7 +334,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
   - A commit that lands on the default branch with `Closes|Fixes|Resolves` and IDs, in a trailer or the subject, closes those items (`how: explicit`).
   - The same keywords in a merged PR's body count too.
   - A bare ID mention, or `Refs:`, adds a note and never closes.
-- **FR-31 Pending on a branch.** Closing trailers on a branch other than the default add a `pending` citation and a badge. They do not change status.
+- **FR-31 Pending on a branch.** Closing trailers on a branch other than the default add a `pending` citation and a badge. They do not change status. So does `Closes` in an open PR's description.
 - **FR-32 Inferred closes.**
   - **Trigger:** a commit lands on the default branch without a closing trailer.
   - **Inputs:** the commit message, a diff summary capped at 8k tokens, and each open item's title, body excerpt and recent notes. Matching uses a small, fast Claude model, called from the Worker and never from the board's Durable Object (§8, Cost).
@@ -439,13 +439,13 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 | **M1 Service core** | Worker, board Durable Object, data model, event log, REST API, GitHub App install + sign-in, CLI basics (FR-1–9, 17–20) | Nick and a second account edit the same board from two CLIs, and each sees the other's changes | **Built and live.** Proven locally with two dev identities. `punch` 0.1.0 is on npm. Not yet tried with Aaron's or Kevin's real accounts. |
 | **M2 Web board** | FR-10–16 | Two browsers stay in sync live, with drag, edit, presence, history and undo | **Built and live** |
 | **M3 Claude plugin** | Skill, commands, hooks, claims, onboarding (FR-21–28) | S1, S2, S4 and S10 work across two machines, and a teammate goes from a fresh clone to a working plugin with one command | Not started |
-| **M4 GitHub auto-close** | Webhooks, explicit closes, pending-on-branch, PR links, reverts, inferred closes (FR-29–34) | S5–S9 work on a real repo | Not started. App webhooks only handle installs and renames (FR-1) so far |
+| **M4 GitHub auto-close** | Webhooks, explicit closes, pending-on-branch, PR links, reverts, inferred closes (FR-29–34) | S5–S9 work on a real repo | **Deterministic sync built** (FR-26 branch claims, FR-29–31, FR-33, FR-34), with acceptance tests against `nnewberg/punchlist-sandbox`. Inferred closes (FR-32) are step 3 of §9.1 |
 | **M5 Migrate and dogfood** | Imports (FR-36–39), My work (FR-35) | Both repos are imported, Aaron and Kevin are onboarded, and the §10 metrics are tracked | My work is built; the imports are not |
 
 ### 9.1 Build order from here (revised 2026-10-16)
 Automated syncing comes **before** any import. An imported board without auto-close starts drifting on day one, which is exactly what success criterion 3 rules out. It would also make Aaron's real board the first place auto-close is ever tested.
 
-1. **A sandbox, plus deterministic GitHub sync (M4, minus inferred closes).**
+1. **A sandbox, plus deterministic GitHub sync (M4, minus inferred closes).** *Built 2026-10-16; see §12.*
    - Create the private repo `nnewberg/punchlist-sandbox` and install the App on it. Its board then appears automatically, since `nnewberg` is on the allowed-owners list.
    - Build webhook intake (FR-29), branch claims (FR-26), explicit closes and pending-on-branch (FR-30, FR-31), and PR links and reverts (FR-33).
    - Test each scenario as a script that runs real `git` and `gh` against the sandbox, then asserts what the board shows (S5–S9).
@@ -509,7 +509,8 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - Owned by `nnewberg`, installable by any account. Only `ALLOWED_OWNERS` (`nnewberg`, `futureleisurefoundation`) get boards.
 - Installed on big-talk, bulletin-bee and punchlist.
 - Permissions: metadata, contents and pull requests, all read. Device Flow is enabled.
-- Webhook events today: installation, installation repositories and repository. **M4 needs push, pull_request, create and delete ticked** under the App's "Permissions & events". Nick has to do that by hand; there's no API for it.
+- Webhook events: installation, installation repositories, repository, push, pull request, create and delete (the last four ticked 2026-10-16; there's no API for it).
+- Also installed on `nnewberg/punchlist-sandbox` (private, prefix `PS`), which exists only for the acceptance tests.
 
 **Sign-in and access**
 - **Web:** a rolling 90-day session cookie, stored hashed. A browser that has signed in before re-authenticates silently through GitHub when the session ends.
@@ -531,4 +532,15 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
   - 35 tickets in `docs/tickets/`. `BT-034-design-prompt.md` is an attachment to BT-034, not a ticket.
   - The free-text Status lines are often stale. BT-008, for one, shipped in `cc16d77`.
   - Only about 7 of 285 commits cite a ticket ID, so drift has to be found by inference (step 3 of §9.1).
+
+**GitHub sync (M4, deterministic)**
+- **Where the work happens.** The Worker verifies the webhook, finds the board by repo id, and makes any GitHub calls: the merged PR behind each citing commit on the default branch, and a merged PR's commits. It then makes one call to the board's Durable Object with plain facts. The object applies them in one transaction and never fetches (§8).
+- **Dedupe.** The object remembers delivery IDs for 30 days, and which commits have landed on the default branch, so a redelivery or a commit seen twice changes nothing. A sync failure returns 500, so the delivery shows as failed on GitHub and can be redelivered from the App's settings.
+- **Only the default branch closes.** `Closes|Fixes|Resolves` with IDs anywhere in a commit message (subject, body or trailer), or in a merged PR's title or description. Elsewhere they add a pending fix: one per item per branch, replaced by a force-push, and dropped when the item closes or the branch is deleted. A PR closed without merging leaves its badge until the branch is deleted.
+- **Refs and mentions are notes.** `Refs:` / `Part of`, and bare `PREFIX-NNN` mentions, add a note citing the commit (and PR), once the commit lands on the default branch. The `refs` citation kind was dropped from the model; a note already carries the commit.
+- **A merged branch closes its item** (decided with Nick): a branch named for an item (`bt-014-…`) that merges closes it, marked `via branch`, unless its commits or PR say `Refs:` for that item. Then the claim ends and the item stays open with a note. The Claude plugin will write `Closes:` and `Refs:` itself (FR-21), so this rule is mostly for hand-made commits.
+- **Branch claims never steal.** Pushing a branch for an item someone else holds adds one note saying so. The pusher's own session claim becomes a branch claim, since the branch outlives the session.
+- **Reverts.** `This reverts commit <sha>` (including a reverted merge commit, matched through its PR) and GitHub's Revert button (`Reverts owner/repo#N`) mark those closes reverted. An item with no other close reopens to the column it was in before, unclaimed, with a note. A revert's quoted subject (`Revert "Fix BT-9"`) never counts as a close.
+- **Who it's from.** GitHub changes are logged as the pusher, commit author or PR merger, `via github`. Citations keep full SHAs and show 7 characters.
+- **Not yet:** membership-change events (the 10-minute access recheck covers them for now), and inferred closes (step 3).
 

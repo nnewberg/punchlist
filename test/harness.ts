@@ -20,9 +20,12 @@ export interface FakeGitHub {
   calls: string[];
   /** GitHub refuses device codes, as it does until the App has Device Flow ticked. */
   deviceDisabled?: boolean;
+  /** Merged PRs by commit SHA (`commits/:sha/pulls`), and each PR's commits (`pulls/:n/commits`). */
+  prOf: Record<string, number>;
+  prCommits: Record<number, { sha: string; message: string; author: string | null }[]>;
 }
 
-export const gh: FakeGitHub = { perms: {}, repos: [], devicePolls: [], calls: [] };
+export const gh: FakeGitHub = { perms: {}, repos: [], devicePolls: [], calls: [], prOf: {}, prCommits: {} };
 export let prod: Env;
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -52,6 +55,8 @@ export function useProdWorker() {
     gh.devicePolls = ['authorization_pending', 'ok'];
     gh.calls = [];
     gh.deviceDisabled = false;
+    gh.prOf = {};
+    gh.prCommits = {};
     clearMemo();
     let poll = 0;
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -71,6 +76,13 @@ export function useProdWorker() {
       if (url.pathname === `/app/installations/${INSTALL}/access_tokens`) return json({ token: 'inst-token', expires_at: new Date(Date.now() + 3600_000).toISOString() });
       if (url.pathname === '/app/installations') return json([{ id: INSTALL, account: { login: 'nnewberg' } }]);
       if (url.pathname === '/installation/repositories') return json({ repositories: gh.repos });
+      const pulls = /^\/repos\/[^/]+\/[^/]+\/commits\/([0-9a-f]+)\/pulls$/.exec(url.pathname);
+      if (pulls) {
+        const n = gh.prOf[pulls[1]!];
+        return json(n ? [{ number: n, merged_at: new Date().toISOString(), base: { ref: 'main' } }] : []);
+      }
+      const prc = /^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/commits$/.exec(url.pathname);
+      if (prc) return json((gh.prCommits[Number(prc[1])] ?? []).map(c => ({ sha: c.sha, commit: { message: c.message }, author: c.author ? { login: c.author } : null })));
       const m = /^\/repos\/[^/]+\/([^/]+)\/collaborators\/([^/]+)\/permission$/.exec(url.pathname);
       if (m) {
         const p = gh.perms[`${m[1]}:${m[2]}`];
@@ -108,4 +120,12 @@ export async function signedIn(login = 'aaron-t', id = 9) {
     env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(id),
   ]);
   return `__Host-pl_session=${await createSession(prod, id)}`;
+}
+
+/** Sends a webhook signed the way GitHub signs it. */
+export async function webhook(event: string, payload: unknown, opts: { secret?: string; delivery?: string } = {}) {
+  const body = JSON.stringify(payload);
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(opts.secret ?? WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)))].map(b => b.toString(16).padStart(2, '0')).join('');
+  return call('/github/webhook', { method: 'POST', body, headers: { 'x-github-event': event, 'x-github-delivery': opts.delivery ?? crypto.randomUUID(), 'x-hub-signature-256': `sha256=${sig}` } });
 }

@@ -208,3 +208,31 @@ export async function verifyWebhook(secret: string, body: ArrayBuffer, header: s
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
   return crypto.subtle.verify('HMAC', key, sig, body);
 }
+
+// ---- Reading commits and PRs for sync (FR-30, FR-33), with the installation's token ----
+
+const repoPath = (owner: string, repo: string) => `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+
+/** The merged PR a commit on the default branch came through, if any (covers rebase merges too). */
+export async function mergedPrFor(env: Env, installationId: number, owner: string, repo: string, sha: string, base: string): Promise<number | null> {
+  const prs = await gh<{ number: number; merged_at: string | null; base: { ref: string } }[]>(`${repoPath(owner, repo)}/commits/${sha}/pulls`, await installationToken(env, installationId));
+  return prs.find(p => p.merged_at && p.base.ref === base)?.number ?? null;
+}
+
+export interface PrCommit {
+  sha: string;
+  message: string;
+  author: string | null;
+}
+
+/** A PR's commits (the first 250, which is all GitHub lists). */
+export async function prCommits(env: Env, installationId: number, owner: string, repo: string, pr: number): Promise<PrCommit[]> {
+  const token = await installationToken(env, installationId);
+  const out: PrCommit[] = [];
+  for (let page = 1; page <= 3; page++) {
+    const batch = await gh<{ sha: string; commit: { message: string }; author: { login: string } | null }[]>(`${repoPath(owner, repo)}/pulls/${pr}/commits?per_page=100&page=${page}`, token);
+    out.push(...batch.map(c => ({ sha: c.sha, message: c.commit.message, author: c.author?.login.toLowerCase() ?? null })));
+    if (batch.length < 100) break;
+  }
+  return out;
+}

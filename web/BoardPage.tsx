@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useParams, useSearchParams } from 'react-router-dom';
 import { person } from '../shared/config';
 import { isRecentDone, matchesQuery } from '../shared/derive';
+import { shortSha } from '../shared/github';
 import { columnItems } from '../shared/ops';
 import type { BoardEntry, Column as ColumnKey, Status } from '../shared/types';
 import { useBoard, type RemoteChange } from './boardClient';
@@ -64,7 +65,7 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardEntry[] }) 
       const cite = [...item.citations].reverse().find(c => c.kind === 'closes');
       const who = cite?.author ?? event.actor.user ?? item.claim?.user ?? null;
       const name = who ? person(who).name : 'GitHub';
-      const via = event.actor.via === 'github' && cite ? (cite.pr ? `${name}'s PR #${cite.pr}` : `${name}'s push ${cite.commit}`) : name;
+      const via = event.actor.via === 'github' && cite ? (cite.pr ? `${name}'s PR #${cite.pr}` : `${name}'s push ${shortSha(cite.commit)}`) : name;
       setArrived(s => new Set(s).add(item.id));
       setTimeout(() => setArrived(s => {
         const n = new Set(s);

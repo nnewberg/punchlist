@@ -1,4 +1,5 @@
 import { age, isRecentDone, openDeps } from '../shared/derive';
+import { shortSha } from '../shared/github';
 import { columnItems, STATUS_LABEL } from '../shared/ops';
 import type { BoardEvent, Item, MyWorkBoard, Snapshot, Status } from '../shared/types';
 
@@ -115,13 +116,14 @@ export function formatShow(it: Item, items: ReadonlyMap<string, Item>, history: 
     facts.join(c.dim(' · ')),
     c.dim(`created by ${it.created_by} ${ago(it.created_at)} via ${it.source.kind}${it.closed_at ? ` · closed ${ago(it.closed_at)}` : ''}`),
   ];
-  for (const ci of it.citations.filter(x => !x.reverted)) {
-    out.push(c.dim(`${ci.kind === 'closes' ? 'closed by' : ci.kind === 'pending' ? 'fix pending on' : 'see'} ${[ci.commit, ci.pr ? `PR #${ci.pr}` : null, ci.branch && ci.kind === 'pending' ? ci.branch : null].filter(Boolean).join(' ')}`));
+  for (const ci of it.citations.filter(x => !x.reverted && (x.kind === 'closes' || it.status !== 'done'))) {
+    const refs = [ci.commit ? shortSha(ci.commit) : null, ci.pr ? `PR #${ci.pr}` : null, ci.kind === 'pending' ? ci.branch : null].filter(Boolean).join(' ');
+    out.push(c.dim(`${ci.kind === 'closes' ? 'closed by' : 'fix pending on'} ${refs}${ci.how === 'branch' ? ' (via branch)' : ci.how === 'inferred' ? ' (inferred)' : ''}`));
   }
   if (it.body.trim()) out.push('', it.body.trim());
   if (it.notes.length) {
     out.push('', c.bold('Notes'));
-    for (const n of it.notes) out.push(`  ${c.dim(`${n.actor} · ${age(n.at)}`)}  ${n.text}`);
+    for (const n of it.notes) out.push(`  ${c.dim(`${n.actor} · ${age(n.at)}`)}  ${n.text}${n.commit ? c.dim(` (${[shortSha(n.commit), n.pr ? `PR #${n.pr}` : ''].filter(Boolean).join(', ')})`) : ''}`);
   }
   if (history.length) {
     out.push('', c.bold('History'));

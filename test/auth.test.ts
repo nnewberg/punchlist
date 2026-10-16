@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Me } from '../shared/types';
 import { prefixFor, ROLE_FRESH_MS } from '../worker/directory';
 import { clearMemo } from '../worker/memo';
-import { call, gh, INSTALL, ORIGIN, seedBoards, signedIn, useProdWorker, WEBHOOK_SECRET } from './harness';
+import { call, gh, INSTALL, ORIGIN, seedBoards, signedIn, useProdWorker, webhook, WEBHOOK_SECRET } from './harness';
 
 // Sign-in, sessions, access and the App webhook, run against the Worker as production would: no dev
 // stub, and a fake GitHub behind `fetch`.
@@ -150,12 +150,7 @@ describe('access follows GitHub (FR-2)', () => {
 });
 
 describe('boards come from the GitHub App (FR-1)', () => {
-  async function hook(event: string, payload: unknown, secret = WEBHOOK_SECRET) {
-    const body = JSON.stringify(payload);
-    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const sig = [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)))].map(b => b.toString(16).padStart(2, '0')).join('');
-    return call('/github/webhook', { method: 'POST', body, headers: { 'x-github-event': event, 'x-hub-signature-256': `sha256=${sig}` } });
-  }
+  const hook = (event: string, payload: unknown, secret = WEBHOOK_SECRET) => webhook(event, payload, { secret });
   const board = (id: number) => env.DB.prepare(`SELECT owner, repo, prefix, archived_at FROM boards WHERE repo_id = ?`).bind(id).first<{ owner: string; repo: string; prefix: string; archived_at: string | null }>();
 
   it('rejects a webhook with a bad signature', async () => {

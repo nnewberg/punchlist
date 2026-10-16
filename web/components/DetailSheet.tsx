@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Markdown from 'react-markdown';
 import { person } from '../../shared/config';
 import { age, openDeps } from '../../shared/derive';
+import { githubUrl, shortSha } from '../../shared/github';
 import { STATUS_LABEL } from '../../shared/ops';
 import type { BoardEvent, BoardInfo, Item, OpError } from '../../shared/types';
 import { api, boardApi } from '../api';
@@ -159,17 +160,23 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                 ? <InlineInput placeholder={`${board.prefix}-012`} onSubmit={v => (send({ op: 'depends', id: item.id, add: [v] }), setAdding(null))} onCancel={() => setAdding(null)} />
                 : <button className="btn-dashed" onClick={() => setAdding('dep')}>+ dependency</button>}
             </Field>
-            {pendingFix.map((c, i) => (
+            {!done && pendingFix.map((c, i) => (
               <Field key={`p${i}`} label="Fix">
-                <span className="badge-pend"><span>◐</span>on branch <span className="mono" style={{ fontSize: 11.5 }}>{c.branch}</span> · not merged</span>
+                <span className="badge-pend">
+                  <span>◐</span>
+                  {c.branch ? <>on branch <span className="mono" style={{ fontSize: 11.5 }}>{c.branch}</span></> : 'in'}
+                  {c.pr && <a className="mono gh-link" href={githubUrl(board, { pr: c.pr })} target="_blank" rel="noreferrer">PR #{c.pr}</a>}
+                  · not merged
+                </span>
               </Field>
             ))}
             {done && closes.map((c, i) => (
               <Field key={`c${i}`} label="Closed by">
-                {c.commit && <span className="mono" style={{ fontSize: 11.5, color: 'var(--accentFg)' }}>{c.commit}</span>}
-                {c.pr && <span className="mono" style={{ fontSize: 11.5, color: 'var(--accentFg)' }}>PR #{c.pr}</span>}
+                {c.commit && <a className="mono gh-link" href={githubUrl(board, { commit: c.commit })} target="_blank" rel="noreferrer">{shortSha(c.commit)}</a>}
+                {c.pr && <a className="mono gh-link" href={githubUrl(board, { pr: c.pr })} target="_blank" rel="noreferrer">PR #{c.pr}</a>}
                 {c.message && <span style={{ color: 'var(--fg2)' }}>“{c.message}”</span>}
                 {c.how === 'inferred' && <span className="badge-pend" title="Matched without an explicit Closes: trailer">inferred{c.confidence != null ? ` · ${Math.round(c.confidence * 100)}%` : ''}</span>}
+                {c.how === 'branch' && <span className="badge-pend" title="Its branch was merged without saying Closes">via branch</span>}
               </Field>
             ))}
           </div>
@@ -186,7 +193,11 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                       {n.via === 'claude' && <span className="badge-agent">✦ Claude</span>}
                       <span className="age">{age(n.at)}</span>
                     </div>
-                    <div className="txt">{n.text}</div>
+                    <div className="txt">
+                      {n.text}
+                      {n.commit && <> <a className="mono gh-link" href={githubUrl(board, { commit: n.commit })} target="_blank" rel="noreferrer">{shortSha(n.commit)}</a></>}
+                      {n.pr && <> <a className="mono gh-link" href={githubUrl(board, { pr: n.pr })} target="_blank" rel="noreferrer">PR #{n.pr}</a></>}
+                    </div>
                   </div>
                 </div>
               ))}

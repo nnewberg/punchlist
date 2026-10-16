@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { applyOp, columnItems, inversePatch } from '../shared/ops';
 import type { Actor, BoardEvent, BoardInfo, ClientMsg, EventMeta, Item, MyWorkBoard, Op, OpError, Role, ServerMsg, Snapshot } from '../shared/types';
+import { ingest, type GhFacts } from './ingest';
 import { buildSeed } from './seed';
 
 // One Durable Object per board (PRD §5.1). Every write goes through here, one at a time, so IDs never
@@ -12,7 +13,7 @@ export type ApplyOutcome =
   | { ok: true; noop: true; item: Item }
   | { ok: false; error: OpError };
 
-/** Ops a client may send. `gh_close` and `restore` are produced by the service itself. */
+/** Ops a client may send. GitHub ops (`cite`, `link_pr`, `revert`, `branch_end`) and `restore` are produced by the service itself. */
 export const CLIENT_OPS = new Set<Op['op']>(['create', 'move', 'edit', 'claim', 'release', 'block', 'unblock', 'note', 'tag', 'depends', 'reopen', 'drop', 'undo']);
 
 interface SocketAttachment {
@@ -34,6 +35,8 @@ interface EventRow extends Record<string, SqlStorageValue> {
 }
 
 const RESYNC_AFTER = 500;
+/** How long a webhook delivery ID is remembered, to ignore GitHub's repeats (FR-29). */
+const DELIVERY_TTL_MS = 30 * 86400_000;
 
 export class BoardDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -56,6 +59,10 @@ export class BoardDO extends DurableObject<Env> {
       seq INTEGER PRIMARY KEY, ts TEXT NOT NULL, item_id TEXT NOT NULL, op TEXT NOT NULL, actor TEXT NOT NULL,
       before TEXT, after TEXT, meta TEXT, undoable INTEGER NOT NULL DEFAULT 1)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS events_item ON events (item_id, seq)`);
+    // GitHub sync (FR-29, FR-33): deliveries already handled, and each commit's PR and whether it has
+    // landed on the default branch.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS gh_deliveries (id TEXT PRIMARY KEY, at TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS gh_commits (sha TEXT PRIMARY KEY, pr INTEGER, merge INTEGER NOT NULL DEFAULT 0, on_default INTEGER NOT NULL DEFAULT 0)`);
     const meta = new Map(this.sql.exec<{ k: string; v: string }>(`SELECT k, v FROM meta`).toArray().map(r => [r.k, r.v]));
     if (meta.has('info')) this.info = JSON.parse(meta.get('info')!);
     this.seq = Number(meta.get('seq') ?? 0);
@@ -147,6 +154,56 @@ export class BoardDO extends DurableObject<Env> {
       upNext: columnItems(all, 'up_next').slice(0, 3),
       blockedOnMe: all.filter(i => i.blocked && i.status !== 'done' && i.status !== 'dropped' && mentions(i.blocked.reason)),
     };
+  }
+
+  /**
+   * One GitHub webhook delivery, already turned into facts by the Worker. Applied in one transaction;
+   * a delivery seen before changes nothing.
+   */
+  ingestGitHub(info: BoardInfo, delivery: string, facts: GhFacts): { duplicate: boolean; changes: number } {
+    this.ensure(info);
+    const changed: { event: BoardEvent; item: Item }[] = [];
+    let duplicate = false;
+    this.ctx.storage.transactionSync(() => {
+      const now = new Date().toISOString();
+      if (this.sql.exec(`SELECT 1 FROM gh_deliveries WHERE id = ?`, delivery).toArray().length) {
+        duplicate = true;
+        return;
+      }
+      this.sql.exec(`INSERT INTO gh_deliveries (id, at) VALUES (?, ?)`, delivery, now);
+      this.sql.exec(`DELETE FROM gh_deliveries WHERE at < ?`, new Date(Date.now() - DELIVERY_TTL_MS).toISOString());
+      const sql = this.sql;
+      ingest(
+        {
+          items: this.items,
+          prefix: this.info!.prefix,
+          apply: (op, actor) => {
+            const out = this.applyInner(op, actor);
+            if (out.ok && !('noop' in out)) changed.push(out);
+          },
+          rememberCommit(sha, o) {
+            const row = sql.exec<{ on_default: number }>(`SELECT on_default FROM gh_commits WHERE sha = ?`, sha).toArray()[0];
+            if (o.onDefault && row?.on_default) return false;
+            sql.exec(
+              `INSERT INTO gh_commits (sha, pr, merge, on_default) VALUES (?, ?, ?, ?)
+               ON CONFLICT (sha) DO UPDATE SET pr = COALESCE(excluded.pr, pr), merge = MAX(merge, excluded.merge), on_default = MAX(on_default, excluded.on_default)`,
+              sha, o.pr ?? null, o.merge ? 1 : 0, o.onDefault ? 1 : 0,
+            );
+            return true;
+          },
+          commitPr(sha, mergeOnly) {
+            const row = sql.exec<{ pr: number }>(
+              `SELECT pr FROM gh_commits WHERE sha LIKE ? AND pr IS NOT NULL AND merge >= ? LIMIT 1`,
+              `${sha.toLowerCase().replace(/[^0-9a-f]/g, '')}%`, mergeOnly ? 1 : 0,
+            ).toArray()[0];
+            return row?.pr ?? null;
+          },
+        },
+        facts,
+      );
+    });
+    for (const c of changed) this.broadcast({ type: 'event', event: c.event, item: c.item });
+    return { duplicate, changes: changed.length };
   }
 
   apply(info: BoardInfo, op: Op, actor: Actor, clientOpId?: string): ApplyOutcome {

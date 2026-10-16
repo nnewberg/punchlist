@@ -5,6 +5,7 @@ import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, peopl
 import { githubConfigured, verifyWebhook } from './github';
 import { resolveUser, type Identity } from './identity';
 import { listTokens, revokeToken } from './tokens';
+import { SYNC_EVENTS, syncFromGitHub } from './webhook';
 
 export { BoardDO };
 
@@ -139,12 +140,13 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
     }
 
     // DEV: simulate GitHub closing an item from a merged PR, so the live "punch" can be tried
-    // before webhooks exist (M4).
+    // without pushing anything.
     if (rest[0] === 'dev' && rest[1] === 'gh-close' && request.method === 'POST' && env.DEV_MODE === '1') {
       if (role !== 'edit') return forbidden(readOnly);
       const body = (await request.json()) as { id: string; pr?: number; commit?: string; author?: string; message?: string };
       const commit = body.commit ?? crypto.randomUUID().replace(/-/g, '').slice(0, 7);
-      const out = await stub.apply(info, { op: 'gh_close', id: body.id, commit, ...(body.pr ? { pr: body.pr } : {}), ...(body.author ? { author: body.author } : {}), ...(body.message ? { message: body.message } : {}) }, { user: null, via: 'github' });
+      const citation = { kind: 'closes' as const, commit, ...(body.pr ? { pr: body.pr } : {}), branch: 'main', how: 'explicit' as const, confidence: null, ...(body.author ? { author: body.author } : {}), ...(body.message ? { message: body.message } : {}) };
+      const out = await stub.apply(info, { op: 'cite', id: body.id, citation }, { user: null, via: 'github' });
       return json(out, out.ok ? 200 : 409);
     }
   }
@@ -152,13 +154,26 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
   return notFound();
 }
 
-// The GitHub App's webhook (installs, uninstalls, renames: FR-1) and its post-install redirect.
+// The GitHub App's webhook (installs, uninstalls, renames: FR-1; pushes and PRs: FR-29) and its post-install redirect.
 async function github(request: Request, env: Env, url: URL): Promise<Response> {
   if (url.pathname === '/github/webhook' && request.method === 'POST') {
     if (!env.GITHUB_WEBHOOK_SECRET) return json({ error: 'not configured' }, 503);
     const body = await request.arrayBuffer();
     if (!(await verifyWebhook(env.GITHUB_WEBHOOK_SECRET, body, request.headers.get('x-hub-signature-256')))) return json({ error: 'bad signature' }, 401);
-    await handleWebhook(env, request.headers.get('x-github-event') ?? '', JSON.parse(new TextDecoder().decode(body)));
+    const event = request.headers.get('x-github-event') ?? '';
+    const payload = JSON.parse(new TextDecoder().decode(body));
+    if (SYNC_EVENTS.has(event)) {
+      // Pushes and PRs (FR-29). A failure is a 500, so the delivery shows as failed on GitHub and can be redelivered.
+      const delivery = request.headers.get('x-github-delivery') ?? crypto.randomUUID();
+      try {
+        console.log('github', event, delivery, await syncFromGitHub(env, event, delivery, payload));
+      } catch (e) {
+        console.error('github sync failed', event, delivery, e);
+        return json({ error: 'sync failed' }, 500);
+      }
+      return new Response(null, { status: 204 });
+    }
+    await handleWebhook(env, event, payload);
     return new Response(null, { status: 204 });
   }
 

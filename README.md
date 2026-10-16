@@ -7,8 +7,24 @@ A shared, live TODO board for each repo that keeps itself up to date. See [PRD.m
 - GitHub sign-in. Each repo with the Punchlist GitHub App installed gets a board, and who can see or change it follows their access to the repo.
 
 - The `punch` CLI ([cli/README.md](cli/README.md)): GitHub device-flow login, the board for the repo you're in, offline reads and an outbox.
+- GitHub sync, from the App's push, pull request, create and delete webhooks. The rules are below.
 
-**Not built yet:** the Claude Code plugin, `punch import`, and push/PR webhooks for auto-close.
+**Not built yet:** the Claude Code plugin, `punch import`, and inferred closes.
+
+## How GitHub keeps the board current
+
+| On GitHub | On the board |
+|---|---|
+| A commit lands on the default branch saying `Closes BT-14` (or `Fixes`, `Resolves`; subject, body or trailer) | BT-14 moves to Done, linked to the commit and its PR |
+| A merged PR's title or description says `Closes BT-14` | The same |
+| `Closes BT-14` on any other branch, or in an open PR's description | A "fix pending" badge; no move |
+| `Refs: BT-14`, `Part of BT-14`, or a bare `BT-14`, landing on the default branch | A note citing the commit; never a close |
+| A branch named for an item (`bt-014-rate-limit`, `nick/BT-14`) is pushed | The pusher claims it, unless someone else holds it (then a note says so) |
+| That branch is merged | BT-14 closes, marked "via branch", unless the branch or PR said `Refs: BT-14`; then it's released and stays open |
+| That branch is deleted unmerged | The claim and any pending fix on it end |
+| A revert of the closing commit or PR lands | BT-14 reopens, and its history keeps the close |
+
+Repeated deliveries and commits seen twice change nothing. A failed delivery shows on GitHub (App settings → Advanced) and can be redelivered.
 
 ## Run it
 
@@ -62,6 +78,17 @@ npm run build:cli && node cli/dist/punch.mjs --help
 
   A role is re-checked once it's 10 minutes old.
 
+## Acceptance tests (GitHub sync)
+
+`npm run acceptance` runs scenarios S4–S9 for real against the live Worker and the private sandbox repo `nnewberg/punchlist-sandbox`, which has the App installed. Each scenario adds fresh items with the built `punch`, pushes branches and merges PRs with `git` and `gh` in a throwaway clone, then waits for the board to show the result.
+
+```sh
+npm run acceptance            # all of them, about five minutes
+npm run acceptance -- S5 S9   # some
+```
+
+It needs `punch login` and `gh` signed in with push access to the sandbox. They test what's deployed, so run them after a merge to `main` has deployed.
+
 ## Deploy
 
 CI deploys on every merge to `main` (`.github/workflows/deploy.yml`). First-time setup:
@@ -84,11 +111,13 @@ CI deploys on every merge to `main` (`.github/workflows/deploy.yml`). First-time
 | `shared/` | Data model (`types.ts`) and the pure `applyOp`. The Durable Object runs `applyOp` to decide each change; the browser runs the same code for optimistic updates. |
 | `worker/index.ts` | Routes: `/v1` (REST and WebSocket), `/auth` (sign-in), `/github` (webhook, post-install). Everything else is static assets. |
 | `worker/board.ts` | `BoardDO`: SQLite items and event log, hibernating WebSockets, undo, catch-up after reconnect. |
-| `worker/auth.ts`, `worker/github.ts`, `worker/directory.ts` | Sessions; the GitHub App (JWT, installation tokens, permission checks); the D1 board directory and roles. |
+| `worker/auth.ts`, `worker/github.ts`, `worker/directory.ts` | Sessions; the GitHub App (JWT, installation tokens, permission checks, PR lookups); the D1 board directory and roles. |
+| `worker/webhook.ts`, `worker/ingest.ts`, `shared/github.ts` | GitHub sync: webhook payloads to facts (Worker), facts to board ops (Durable Object), and reading commit messages and branch names. |
+| `acceptance/` | Scenario tests against the live Worker and the sandbox repo. |
 | `migrations/` | D1 schema: users, sessions, boards, access, API tokens. |
 | `cli/` | The `punch` CLI (npm `@nnewberg/punchlist`), bundled with the shared board code into one file. |
 | `web/` | React app. `boardClient.ts` is the live store; `components/` holds the UI. |
-| `test/` | Vitest in the Workers runtime (`npm test`), with GitHub faked for sign-in and access. |
+| `test/` | Vitest in the Workers runtime (`npm test`), with GitHub faked for sign-in, access, webhooks and PR lookups. |
 
 ## Checks
 
