@@ -80,6 +80,21 @@ punch note ID "Root cause: the invite handler retries on 429, which doubles the 
 
 Keep notes sparse, a note or two per session, not a running log. Notes never change status.
 
+## Fixing a title or description
+
+When an item's title is unclear, or its description no longer says what the work is (the plan changed, a decision narrowed the scope), fix it instead of stacking notes on top. Notes say what happened; the description says what the work is.
+
+```sh
+punch edit ID --title "Rate-limit the invite endpoint"
+punch edit ID --body-file - <<'EOF'
+<the whole new description>
+EOF
+```
+
+- `--body-file` replaces the whole description, so run `punch show ID` first and keep what's still true.
+- Edit items the person created freely. Someone else's only when the user asks.
+- If it says someone else edited it, nothing was saved. Run `punch show ID`, fold their change into yours, and edit again.
+
 ## Finishing work
 
 Items close themselves when the fix lands on the default branch, through GitHub. When the user asks you to commit, cite the item in the commit message:
