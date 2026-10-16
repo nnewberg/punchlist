@@ -1,12 +1,12 @@
 {
   "name": "@nnewberg/punchlist",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "punch: the command line for Punchlist, a live shared TODO board for each repo",
   "license": "UNLICENSED",
   "type": "module",
   "bin": { "punch": "dist/punch.mjs" },
   "files": ["dist"],
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=20" },
   "dependencies": {
     "@napi-rs/keyring": "2.1.0"
   },

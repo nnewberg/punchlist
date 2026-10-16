@@ -1,5 +1,6 @@
 import { randomToken, sha256 } from './crypto';
 import type { User } from './directory';
+import { clearMemo, memo } from './memo';
 
 // API tokens (FR-3): what `punch login` gets after the GitHub device flow. One per person per machine,
 // sent as `Authorization: Bearer pl_…`, stored only as a hash, revocable from the CLI or the API.
@@ -29,10 +30,15 @@ export async function mintToken(env: Env, userId: number, machine: string): Prom
 /** Who a Bearer token belongs to, if it's live. `last_used_at` is written at most once a day (PRD §8). */
 export async function tokenUser(env: Env, token: string): Promise<{ user: User; tokenId: string } | null> {
   if (!token.startsWith('pl_')) return null;
+  const hash = await sha256(token);
+  return memo(`token:${hash}`, () => lookup(env, hash));
+}
+
+async function lookup(env: Env, hash: string): Promise<{ user: User; tokenId: string } | null> {
   const row = await env.DB.prepare(
     `SELECT t.id AS token_id, t.last_used_at, u.id, u.login, u.name, u.avatar_url
      FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL`,
-  ).bind(await sha256(token)).first<{ token_id: string; last_used_at: string | null; id: number; login: string; name: string | null; avatar_url: string | null }>();
+  ).bind(hash).first<{ token_id: string; last_used_at: string | null; id: number; login: string; name: string | null; avatar_url: string | null }>();
   if (!row) return null;
   if (!row.last_used_at || Date.now() - Date.parse(row.last_used_at) > DAY_MS) {
     await env.DB.prepare(`UPDATE tokens SET last_used_at = ? WHERE id = ?`).bind(nowIso(), row.token_id).run();
@@ -50,5 +56,6 @@ export async function listTokens(env: Env, userId: number): Promise<TokenInfo[]>
 /** Revokes one of this person's tokens. False if it isn't theirs or is already revoked. */
 export async function revokeToken(env: Env, userId: number, id: string): Promise<boolean> {
   const r = await env.DB.prepare(`UPDATE tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL`).bind(nowIso(), id, userId).run();
+  clearMemo();
   return r.meta.changes > 0;
 }

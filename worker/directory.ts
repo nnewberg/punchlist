@@ -1,6 +1,7 @@
 import { DEV_PEOPLE } from '../shared/config';
 import type { BoardInfo, PersonInfo, Role } from '../shared/types';
 import { listInstallationRepos, listInstallations, repoPermission } from './github';
+import { memo } from './memo';
 
 // The board directory and who may use which board (PRD FR-1, FR-2), kept in D1.
 
@@ -57,9 +58,21 @@ export function allowedOwner(env: Env, owner: string): boolean {
 
 const BOARD_COLS = 'repo_id, owner, repo, prefix, installation_id';
 
-export async function findBoard(env: Env, owner: string, repo: string): Promise<Board | null> {
-  const row = await env.DB.prepare(`SELECT ${BOARD_COLS} FROM boards WHERE owner = ? AND repo = ? AND archived_at IS NULL`).bind(owner, repo).first<BoardRow>();
-  return row ? toBoard(row) : null;
+/**
+ * A board by name with this person's role on it, in one query (and none at all when the answer is
+ * under a minute old in this isolate). Unknown and inaccessible boards both come back as role 'none'.
+ */
+export async function boardForUser(env: Env, user: User, owner: string, repo: string): Promise<{ board: Board | null; role: Role }> {
+  return memo(`board:${user.id}:${owner.toLowerCase()}/${repo.toLowerCase()}`, async () => {
+    const row = await env.DB.prepare(
+      `SELECT b.repo_id, b.owner, b.repo, b.prefix, b.installation_id, a.role, a.checked_at
+       FROM boards b LEFT JOIN access a ON a.repo_id = b.repo_id AND a.user_id = ?
+       WHERE b.owner = ? AND b.repo = ? AND b.archived_at IS NULL`,
+    ).bind(user.id, owner, repo).first<BoardRow & { role: Role | null; checked_at: string | null }>();
+    if (!row) return { board: null, role: 'none' as Role };
+    const board = toBoard(row);
+    return { board, role: await roleFor(env, user, board, row.role && row.checked_at ? { role: row.role, checked_at: row.checked_at } : null) };
+  }, v => !!v.board);
 }
 
 export async function listBoards(env: Env): Promise<Board[]> {
@@ -165,8 +178,8 @@ export async function handleWebhook(env: Env, event: string, p: WebhookPayload) 
 const roleOf = (permission: string): Role => (permission === 'admin' || permission === 'write' ? 'edit' : permission === 'read' ? 'view' : 'none');
 
 /** This person's role on a board, from GitHub, cached for ten minutes. */
-export async function roleFor(env: Env, user: User, board: Board): Promise<Role> {
-  const row = await env.DB.prepare(`SELECT role, checked_at FROM access WHERE user_id = ? AND repo_id = ?`).bind(user.id, board.repoId).first<{ role: Role; checked_at: string }>();
+export async function roleFor(env: Env, user: User, board: Board, known?: { role: Role; checked_at: string } | null): Promise<Role> {
+  const row = known !== undefined ? known : await env.DB.prepare(`SELECT role, checked_at FROM access WHERE user_id = ? AND repo_id = ?`).bind(user.id, board.repoId).first<{ role: Role; checked_at: string }>();
   if (env.DEV_MODE === '1') return row?.role ?? 'none';
   if (row && Date.now() - Date.parse(row.checked_at) < ROLE_FRESH_MS) return row.role;
   if (board.installationId == null) return 'none';

@@ -2,6 +2,7 @@ import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { Me } from '../shared/types';
 import { prefixFor, ROLE_FRESH_MS } from '../worker/directory';
+import { clearMemo } from '../worker/memo';
 import { call, gh, INSTALL, ORIGIN, seedBoards, signedIn, useProdWorker, WEBHOOK_SECRET } from './harness';
 
 // Sign-in, sessions, access and the App webhook, run against the Worker as production would: no dev
@@ -109,6 +110,7 @@ describe('access follows GitHub (FR-2)', () => {
     // Write access is taken away; once the cached role is stale, the board disappears.
     gh.perms = {};
     await env.DB.prepare(`UPDATE access SET checked_at = ? WHERE user_id = 9`).bind(new Date(Date.now() - ROLE_FRESH_MS - 1000).toISOString()).run();
+    clearMemo(); // and the Worker's one-minute memory of it has lapsed too
     expect((await call('/v1/boards/futureleisurefoundation/big-talk', { cookie })).status).toBe(404);
     expect(asked()).toBe(2);
   });
