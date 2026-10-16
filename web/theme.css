@@ -156,7 +156,12 @@ input, textarea { font: inherit; color: var(--fg); }
 .card { position: relative; isolation: isolate; background: var(--card); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow); padding: var(--pad); cursor: default; display: flex; flex-direction: column; gap: 3px; text-align: left; width: 100%; }
 .card:hover { border-color: var(--fg3); box-shadow: var(--shadow-h); }
 .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.card-wrap.lifted .card { background: transparent; border-style: dashed; border-color: color-mix(in srgb, var(--fg3) 65%, transparent); box-shadow: none; }
+.card-wrap.lifted .card {
+  /* An SVG outline, since CSS can't lengthen the dashes of a dashed border. The 3px stroke is centred
+     on the edge, so 1.5px shows; the card keeps its own transparent border, so the box is the same size. */
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='100%25' height='100%25' rx='12' ry='12' fill='none' stroke='%239d9387' stroke-opacity='.7' stroke-width='3' stroke-dasharray='9 6'/%3E%3C/svg%3E") border-box 0 0 / 100% 100% no-repeat;
+  border-color: transparent; box-shadow: none;
+}
 .card-wrap.lifted .card > * { visibility: hidden; }
 .drop-end { position: relative; height: 0; margin-top: calc(var(--cgap) * -1); }
 .drop-end::before { content: ''; position: absolute; left: 6px; right: 6px; top: calc(var(--cgap) / 2 - 1px); height: 2px; border-radius: 2px; background: var(--accent); }
