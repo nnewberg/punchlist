@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, vi } from 'vitest';
 import { createSession } from '../worker/auth';
 import { prefixFor } from '../worker/directory';
 import worker from '../worker/index';
+import { clearMemo } from '../worker/memo';
 
 // Runs the Worker as production would (no dev stub), with a fake GitHub behind `fetch`.
 
@@ -51,6 +52,7 @@ export function useProdWorker() {
     gh.devicePolls = ['authorization_pending', 'ok'];
     gh.calls = [];
     gh.deviceDisabled = false;
+    clearMemo();
     let poll = 0;
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);

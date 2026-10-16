@@ -1,7 +1,7 @@
 import type { Actor, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
 import { BoardDO, CLIENT_OPS } from './board';
-import { boardInfo, boardsFor, ensureDevSeed, findBoard, handleWebhook, peopleOn, reconcile, reconcileSoon, roleFor, type Board, type User } from './directory';
+import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
 import { githubConfigured, verifyWebhook } from './github';
 import { resolveUser, type Identity } from './identity';
 import { listTokens, revokeToken } from './tokens';
@@ -87,8 +87,7 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
 
   // /v1/boards/:owner/:repo[/...]
   if (parts[1] === 'boards' && parts.length >= 4) {
-    const board = await findBoard(env, parts[2]!, parts[3]!);
-    const role = board ? await roleFor(env, user, board) : 'none';
+    const { board, role } = await boardForUser(env, user, parts[2]!, parts[3]!);
     // 404 rather than 403, so outsiders can't confirm a board exists (FR-3a).
     if (!board || role === 'none') return notFound();
     const stub = stubFor(env, board);
