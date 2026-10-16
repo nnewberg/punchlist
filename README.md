@@ -46,7 +46,7 @@ Then each person runs `/punch login` once. Claims a Claude session makes are rel
 | A commit lands on the default branch saying `Closes BT-14` (or `Fixes`, `Resolves`; subject, body or trailer) | BT-14 moves to Done, linked to the commit and its PR |
 | A merged PR's title or description says `Closes BT-14` | The same |
 | `Closes BT-14` on any other branch, or in an open PR's description | A "fix pending" badge; no move |
-| `Refs: BT-14`, `Part of BT-14`, or a bare `BT-14`, landing on the default branch | A note citing the commit; never a close |
+| `Refs: BT-14` or `Part of BT-14`, landing on the default branch | A note citing the commit; never a close. A bare `BT-14` in a message does nothing |
 | A branch named for an item (`bt-014-rate-limit`, `nick/BT-14`) is pushed | The pusher claims it, unless someone else holds it (then a note says so) |
 | That branch is merged | BT-14 closes, marked "via branch", unless the branch or PR said `Refs: BT-14`; then it's released and stays open |
 | That branch is deleted unmerged | The claim and any pending fix on it end |

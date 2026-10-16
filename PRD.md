@@ -333,7 +333,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 - **FR-30 Explicit closes:**
   - A commit that lands on the default branch with `Closes|Fixes|Resolves` and IDs, in a trailer or the subject, closes those items (`how: explicit`).
   - The same keywords in a merged PR's body count too.
-  - A bare ID mention, or `Refs:`, adds a note and never closes.
+  - `Refs:` or `Part of` adds a note and never closes. A bare ID mention does nothing (decided 2026-10-16: on big-talk, a housekeeping commit listing ID ranges put a note on six cards).
 - **FR-31 Pending on a branch.** Closing trailers on a branch other than the default add a `pending` citation and a badge. They do not change status. So does `Closes` in an open PR's description.
 - **FR-32 Inferred closes.**
   - **Trigger:** a commit lands on the default branch without a closing trailer.
@@ -545,7 +545,7 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - **Where the work happens.** The Worker verifies the webhook, finds the board by repo id, and makes any GitHub calls: the merged PR behind each citing commit on the default branch, and a merged PR's commits. It then makes one call to the board's Durable Object with plain facts. The object applies them in one transaction and never fetches (§8).
 - **Dedupe.** The object remembers delivery IDs for 30 days, and which commits have landed on the default branch, so a redelivery or a commit seen twice changes nothing. A sync failure returns 500, so the delivery shows as failed on GitHub and can be redelivered from the App's settings.
 - **Only the default branch closes.** `Closes|Fixes|Resolves` with IDs anywhere in a commit message (subject, body or trailer), or in a merged PR's title or description. Elsewhere they add a pending fix: one per item per branch, replaced by a force-push, and dropped when the item closes or the branch is deleted. A PR closed without merging leaves its badge until the branch is deleted.
-- **Refs and mentions are notes.** `Refs:` / `Part of`, and bare `PREFIX-NNN` mentions, add a note citing the commit (and PR), once the commit lands on the default branch. The `refs` citation kind was dropped from the model; a note already carries the commit.
+- **Refs are notes.** `Refs:` / `Part of` adds a note citing the commit (and PR), once the commit lands on the default branch. Bare `PREFIX-NNN` mentions used to as well; since 2026-10-16 they do nothing, because a housekeeping commit on big-talk that listed ID ranges noted six unrelated cards. The `refs` citation kind was dropped from the model; a note already carries the commit.
 - **A merged branch closes its item** (decided with Nick): a branch named for an item (`bt-014-…`) that merges closes it, marked `via branch`, unless its commits or PR say `Refs:` for that item. Then the claim ends and the item stays open with a note. The Claude plugin will write `Closes:` and `Refs:` itself (FR-21), so this rule is mostly for hand-made commits.
 - **Branch claims never steal.** Pushing a branch for an item someone else holds adds one note saying so. The pusher's own session claim becomes a branch claim, since the branch outlives the session.
 - **Reverts.** `This reverts commit <sha>` (including a reverted merge commit, matched through its PR) and GitHub's Revert button (`Reverts owner/repo#N`) mark those closes reverted. An item with no other close reopens to the column it was in before, unclaimed, with a note. A revert's quoted subject (`Revert "Fix BT-9"`) never counts as a close.
