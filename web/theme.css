@@ -137,7 +137,7 @@ input, textarea { font: inherit; color: var(--fg); }
 .col-hd { display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 6px; flex: none; font-size: var(--col-title); font-weight: 600; color: var(--fg2); }
 .glyph { width: 13px; height: 13px; flex: none; display: block; }
 .glyph.backlog, .glyph.dropped { color: var(--fg3); }
-.glyph.up_next { color: var(--fg2); }
+.glyph.up_next { color: color-mix(in srgb, var(--accent) 55%, var(--fg2)); }
 .glyph.in_progress { color: var(--pend); }
 .glyph.done { color: var(--ok); }
 .col-hd .title { color: var(--fg); }
