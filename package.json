@@ -10,9 +10,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config cli/vitest.config.ts",
     "cf-typegen": "wrangler types --strict-vars=false worker/worker-configuration.d.ts",
-    "db:local": "wrangler d1 migrations apply DB --local"
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "build:cli": "node cli/build.mjs",
+    "test:cli": "vitest run --config cli/vitest.config.ts"
   },
   "dependencies": {
     "fractional-indexing": "^3.4.0",
@@ -24,9 +26,12 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.64.0",
     "@cloudflare/vitest-plugin": "^1.4.4",
+    "@napi-rs/keyring": "2.1.0",
+    "@types/node": "22.20.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "esbuild": "0.28.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vitest": "^4.1.12",

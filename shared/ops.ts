@@ -107,7 +107,7 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
 
   if (op.op === 'undo') return fail('invalid', 'undo is resolved by the board, not applied directly');
 
-  const cur = items.get(op.id);
+  const cur = items.get(op.id) ?? resolveId(items, op.id);
   if (!cur) return fail('not_found', `No item ${op.id}`);
   const it: Item = structuredClone(cur);
   let meta: EventMeta = {};
@@ -116,7 +116,8 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
     case 'move': {
       if (!isColumn(op.status)) return fail('invalid', `Unknown status ${op.status}`);
       const from = it.status;
-      it.rank = op.status === 'done' ? it.rank : rankFor(items.values(), op.status, op.beforeId, it.id);
+      const beforeId = op.beforeId && op.beforeId !== 'top' ? (resolveId(items, op.beforeId)?.id ?? op.beforeId) : op.beforeId;
+      it.rank = op.status === 'done' ? it.rank : rankFor(items.values(), op.status, beforeId, it.id);
       setStatus(it, op.status, now);
       if (op.status === 'in_progress' && !it.claim) it.claim = { user, kind: 'manual', since: now }; // FR-11
       if ((op.status === 'backlog' || op.status === 'up_next') && from === 'in_progress') it.claim = null;
@@ -266,11 +267,19 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
   return { ok: true, before: cur, after: it, meta };
 }
 
+/** `BT-030`, `bt-30` and `BT030` are the same item; so is any of its aliases. */
+const idKey = (ref: string) => {
+  const m = /^([a-z]+)-?0*(\d+)([a-z]*)$/i.exec(ref.trim());
+  return m ? `${m[1]!.toUpperCase()}-${m[2]}${m[3]!.toLowerCase()}` : ref.trim().toUpperCase();
+};
+
 export function resolveId(items: ReadonlyMap<string, Item>, ref: string): Item | undefined {
   const direct = items.get(ref);
   if (direct) return direct;
-  const upper = ref.toUpperCase();
-  for (const it of items.values()) if (it.id.toUpperCase() === upper || it.aliases.some(a => a.toUpperCase() === upper)) return it;
+  const key = idKey(ref);
+  const upper = ref.trim().toUpperCase();
+  for (const it of items.values()) if (idKey(it.id) === key) return it;
+  for (const it of items.values()) if (it.aliases.some(a => a.toUpperCase() === upper || idKey(a) === key)) return it;
   return undefined;
 }
 

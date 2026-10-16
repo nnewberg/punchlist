@@ -1,5 +1,7 @@
-import { reconcileSoon, upsertUser, type User } from './directory';
-import { authorizeUrl, githubConfigured, userFromCode } from './github';
+import { randomToken, sha256 } from './crypto';
+import { ensureDevSeed, reconcileSoon, upsertUser, userByLogin, type User } from './directory';
+import { authorizeUrl, githubConfigured, pollDeviceFlow, startDeviceFlow, userFromCode } from './github';
+import { mintToken } from './tokens';
 
 // Signing in with GitHub (FR-3, FR-3a). The only way in is the GitHub App's user authorization; the
 // session is a random token in an HttpOnly cookie, stored only as a hash, kept alive for 90 days of
@@ -27,13 +29,6 @@ export function readCookie(request: Request, name: string): string | null {
 const cookie = (name: string, value: string, maxAge: number, httpOnly = true) =>
   `${name}=${value}; Path=/; Max-Age=${maxAge}; Secure; SameSite=Lax${httpOnly ? '; HttpOnly' : ''}`;
 
-const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const randomToken = () => b64url(crypto.getRandomValues(new Uint8Array(32)));
-
-async function sha256(s: string): Promise<string> {
-  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-  return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('');
-}
 
 /** Only same-site paths, so `next` can't send someone off to another site after signing in. */
 function safeNext(next: string | null): string {
@@ -92,6 +87,9 @@ const page = (status: number, message: string) =>
     { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } },
   );
 
+const json = (data: unknown, status = 200) =>
+  new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+
 const redirect = (to: string, cookies: string[] = []) => {
   const headers = new Headers({ location: to, 'cache-control': 'no-store' });
   for (const c of cookies) headers.append('set-cookie', c);
@@ -140,6 +138,36 @@ export async function handleAuth(request: Request, env: Env, ctx: ExecutionConte
       cookie(KNOWN_COOKIE, '1', 400 * 86_400, false),
       cookie(OAUTH_COOKIE, '', 0),
     ]);
+  }
+
+  // ---- The CLI: GitHub's device flow, run by the Worker, ending in a Punchlist API token ----
+
+  if (url.pathname === '/auth/device/start' && request.method === 'POST') {
+    if (!githubConfigured(env)) return json({ error: 'GitHub sign-in isn’t set up on this server.' }, 503);
+    const d = await startDeviceFlow(env);
+    return json({ user_code: d.user_code, verification_uri: d.verification_uri, handle: d.device_code, interval: d.interval, expires_in: d.expires_in });
+  }
+
+  if (url.pathname === '/auth/device/poll' && request.method === 'POST') {
+    if (!githubConfigured(env)) return json({ error: 'GitHub sign-in isn’t set up on this server.' }, 503);
+    const body = (await request.json().catch(() => ({}))) as { handle?: string; machine?: string };
+    if (!body.handle) return json({ error: 'handle required' }, 400);
+    const r = await pollDeviceFlow(env, body.handle);
+    if (r.status !== 'ok') return json(r, r.status === 'pending' ? 202 : 400);
+    const user = await upsertUser(env, r.user);
+    await env.DB.prepare(`DELETE FROM access WHERE user_id = ?`).bind(user.id).run();
+    const sync = reconcileSoon(env);
+    if (sync) ctx.waitUntil(sync);
+    return json({ status: 'ok', token: await mintToken(env, user.id, body.machine ?? ''), user: user.login });
+  }
+
+  // DEV: a token for one of the sample people, so two local CLIs can be two people.
+  if (url.pathname === '/auth/dev-token' && request.method === 'POST' && env.DEV_MODE === '1') {
+    await ensureDevSeed(env);
+    const body = (await request.json().catch(() => ({}))) as { as?: string; machine?: string };
+    const user = await userByLogin(env, body.as ?? 'nick');
+    if (!user) return json({ error: `No dev user ${body.as}` }, 404);
+    return json({ status: 'ok', token: await mintToken(env, user.id, body.machine ?? 'dev'), user: user.login });
   }
 
   if (url.pathname === '/auth/logout' && request.method === 'POST') {

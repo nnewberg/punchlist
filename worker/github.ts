@@ -140,6 +140,61 @@ export async function userFromCode(env: Env, code: string, redirectUri: string):
   return gh<GitHubUser>('/user', body.access_token);
 }
 
+// ---- Signing in from the CLI: GitHub's device flow (FR-3) ----
+// The Worker runs both halves, so the CLI only ever talks to Punchlist. A device code is only good for
+// signing in as whoever approves it on GitHub, so it needs no protecting beyond what GitHub does.
+
+async function githubForm<T>(url: string, body: Record<string, string>): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'punchlist' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new GitHubError(res.status, `GitHub ${url}: ${res.status}`);
+  return (await res.json()) as T;
+}
+
+export interface DeviceStart {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+}
+
+export function startDeviceFlow(env: Env): Promise<DeviceStart> {
+  return githubForm<DeviceStart>('https://github.com/login/device/code', { client_id: env.GITHUB_CLIENT_ID! });
+}
+
+export type DevicePoll =
+  | { status: 'ok'; user: GitHubUser }
+  | { status: 'pending'; interval?: number }
+  | { status: 'failed'; reason: 'expired' | 'denied' | 'disabled' | 'error'; message: string };
+
+/** One poll: the person hasn't approved yet, has (with who they are), or the flow is over. */
+export async function pollDeviceFlow(env: Env, deviceCode: string): Promise<DevicePoll> {
+  const r = await githubForm<{ access_token?: string; error?: string; interval?: number; error_description?: string }>('https://github.com/login/oauth/access_token', {
+    client_id: env.GITHUB_CLIENT_ID!,
+    device_code: deviceCode,
+    grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+  });
+  if (r.access_token) return { status: 'ok', user: await gh<GitHubUser>('/user', r.access_token) };
+  switch (r.error) {
+    case 'authorization_pending':
+      return { status: 'pending' };
+    case 'slow_down':
+      return { status: 'pending', interval: r.interval };
+    case 'expired_token':
+      return { status: 'failed', reason: 'expired', message: 'The code expired. Run `punch login` again.' };
+    case 'access_denied':
+      return { status: 'failed', reason: 'denied', message: 'Sign-in was cancelled on GitHub.' };
+    case 'device_flow_disabled':
+      return { status: 'failed', reason: 'disabled', message: 'Device sign-in is turned off for the Punchlist GitHub App.' };
+    default:
+      return { status: 'failed', reason: 'error', message: r.error_description ?? r.error ?? 'GitHub sign-in failed.' };
+  }
+}
+
 // ---- Webhooks ----
 
 /** Checks `X-Hub-Signature-256` (HMAC-SHA256 of the raw body) in constant time. */
