@@ -134,7 +134,6 @@ input, textarea { font: inherit; color: var(--fg); }
 /* ---- Board ---- */
 .board { flex: 1; min-height: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, 1fr); grid-template-rows: minmax(0, 1fr); gap: var(--colgap); padding: var(--board-pad); overflow-x: auto; }
 .col { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-radius: var(--col-r); padding: var(--col-pad); }
-.col.drop-target { box-shadow: inset 0 0 0 1.5px var(--accentSoft); }
 .col-hd { display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 6px; flex: none; font-size: var(--col-title); font-weight: 600; color: var(--fg2); }
 .col-hd .glyph { font-size: 11px; color: var(--fg3); }
 .col-hd .glyph.ok { color: var(--ok); }
@@ -143,7 +142,9 @@ input, textarea { font: inherit; color: var(--fg); }
 .col-hd .sub { font-weight: 400; color: var(--fg3); font-size: 12px; }
 .col-hd .end { margin-left: auto; }
 .col-hd a.end { font-size: 12px; font-weight: 400; color: var(--fg3); }
-.col-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: none; display: flex; flex-direction: column; gap: var(--cgap); padding: 8px 3px 10px; margin-top: -5px; }
+.col-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: none; display: flex; flex-direction: column; gap: var(--cgap); padding: 8px 3px 10px; margin-top: -5px; position: relative; }
+.col-tail { display: flex; flex-direction: column; gap: var(--cgap); }
+.col-tail:empty { display: none; }
 .older { font-size: 12px; color: var(--fg3); background: none; border: 1px dashed color-mix(in oklab, var(--fg3) 45%, transparent); border-radius: var(--r); padding: 8px; cursor: pointer; margin-top: 2px; }
 .older:hover { color: var(--fg); border-color: var(--fg3); }
 .col-empty { font-size: 12.5px; color: var(--fg3); padding: 10px 6px; }
@@ -151,7 +152,6 @@ input, textarea { font: inherit; color: var(--fg); }
 /* ---- Card ---- */
 .card-wrap { display: flex; flex-direction: column; gap: 5px; position: relative; }
 .card-wrap.arrived { animation: at-arrive 6s ease-out 1 both; }
-.card-wrap.drop-before::before { content: ''; position: absolute; left: 6px; right: 6px; top: calc(var(--cgap) / -2 - 1px); height: 2px; border-radius: 2px; background: var(--accent); }
 .caption { font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg3); padding: 8px 2px 0; }
 .card { position: relative; isolation: isolate; background: var(--card); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow); padding: var(--pad); cursor: default; display: flex; flex-direction: column; gap: 3px; text-align: left; width: 100%; }
 .card:hover { border-color: var(--fg3); box-shadow: var(--shadow-h); }
@@ -163,8 +163,31 @@ input, textarea { font: inherit; color: var(--fg); }
   border-color: transparent; box-shadow: none;
 }
 .card-wrap.lifted .card > * { visibility: hidden; }
-.drop-end { position: relative; height: 0; margin-top: calc(var(--cgap) * -1); }
-.drop-end::before { content: ''; position: absolute; left: 6px; right: 6px; top: calc(var(--cgap) / 2 - 1px); height: 2px; border-radius: 2px; background: var(--accent); }
+.card { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+/* Dragging. The seam under the card in hand opens (cards below slide down by its height) and shows
+   where it will land; the card itself follows the pointer, lifted and leaning into the motion. */
+.board.dragging .card-wrap, .board.dragging .col-tail { transition: translate .26s cubic-bezier(.2, 1, .3, 1.06); }
+.drop-zone {
+  position: absolute; left: 3px; right: 3px; border-radius: var(--r); pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 9%, transparent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='100%25' height='100%25' rx='12' ry='12' fill='none' stroke='%23e4825a' stroke-opacity='.75' stroke-width='3' stroke-dasharray='9 6'/%3E%3C/svg%3E") 0 0 / 100% 100% no-repeat;
+  transition: top .26s cubic-bezier(.2, 1, .3, 1.06);
+  animation: zone-in .22s cubic-bezier(.2, 1, .3, 1) both;
+  transform-origin: 50% 0;
+}
+@keyframes zone-in { from { opacity: 0; transform: scaleY(.4); } }
+.drag-float { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; will-change: transform; }
+.drag-float .drag-lift { animation: lift .2s cubic-bezier(.3, 1.6, .5, 1) both; }
+.drag-float.dropping .drag-lift { animation: settle .2s cubic-bezier(.2, .8, .2, 1) both; }
+.drag-float .card {
+  rotate: var(--tilt, 0deg); transition: rotate .18s ease-out, box-shadow .2s;
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, .5), 0 6px 14px rgba(0, 0, 0, .35);
+}
+.drag-float.dropping .card { --tilt: 0deg; box-shadow: var(--shadow); border-color: var(--border); }
+@keyframes lift { from { transform: none; } to { transform: rotate(1.5deg) scale(1.035); } }
+@keyframes settle { from { transform: rotate(1.5deg) scale(1.035); } to { transform: none; } }
+html.is-dragging, html.is-dragging * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
 .card .glow { position: absolute; inset: -1px; z-index: -1; border-radius: var(--r); border: 1.5px solid var(--accent); background: var(--accentSoft); animation: at-glow 6s ease-out 1 both; pointer-events: none; }
 .card .focus { position: absolute; inset: -3px; border-radius: calc(var(--r) + 2px); border: 2px solid var(--accent); pointer-events: none; }
 .card-top { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--id); font-family: var(--mono); color: var(--fg3); }

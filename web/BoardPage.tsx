@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { person } from '../shared/config';
 import { isRecentDone, matchesQuery } from '../shared/derive';
@@ -10,6 +10,7 @@ import { DetailSheet } from './components/DetailSheet';
 import { emptyFilters, FilterMenu, filterCount, Header, type Filters } from './components/Header';
 import { Toast, type ToastData } from './components/Toast';
 import { Glyph, PlusIcon } from './components/ui';
+import { DragFloat, Flip, useCardDrag, type Slot } from './drag';
 
 const COLUMNS: { key: Status; title: string; sub?: string }[] = [
   { key: 'backlog', title: 'Backlog' },
@@ -44,9 +45,6 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
   const [composer, setComposer] = useState<ColumnKey | null>(null);
   const [arrived, setArrived] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<ToastData | null>(null);
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [lifted, setLifted] = useState<string | null>(null);
-  const [dropAt, setDropAt] = useState<{ status: Status; beforeId: string | null } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -108,6 +106,37 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
     sources: [...new Set(all.map(i => i.source.kind))].sort(),
   }), [all]);
 
+  const columns = useMemo(() => [...COLUMNS, ...(filters.dropped ? [{ key: 'dropped' as const, title: 'Dropped' }] : [])], [filters.dropped]);
+  // What each column shows, top to bottom. Done holds only the last two weeks unless expanded.
+  const lists = useMemo(() => new Map(columns.map(col => {
+    let list = columnItems(visible, col.key);
+    let older = 0;
+    if (col.key === 'done' && !searching && !showOlder) {
+      const recent = list.filter(i => isRecentDone(i));
+      older = list.length - recent.length;
+      list = recent;
+    }
+    return [col.key, { list, older }] as const;
+  })), [columns, visible, searching, showOlder]);
+
+  const { drag, onPointerDown, floatRef, flipHint } = useCardDrag({
+    resolve: (id, slot) => {
+      const cur = items.get(id);
+      const list = lists.get(slot.status)?.list ?? [];
+      if (!cur) return null;
+      // Done is newest first, so whatever closes now lands on top.
+      if (slot.status === 'done') return cur.status === 'done' ? null : { status: 'done', beforeId: list[0]?.id ?? null };
+      if (cur.status === slot.status) {
+        const i = list.findIndex(x => x.id === id);
+        if ((list[i + 1]?.id ?? null) === slot.beforeId) return null;
+      }
+      return slot;
+    },
+    onDrop: (id: string, slot: Slot) => {
+      void client?.send({ op: 'move', id, status: slot.status, beforeId: slot.status === 'done' ? null : slot.beforeId });
+    },
+  });
+
   if (!loaded) return <Shell me={me} boards={boards} />;
   if (missing || !board || !client) {
     return (
@@ -117,34 +146,7 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
     );
   }
 
-  const columns = [...COLUMNS, ...(filters.dropped ? [{ key: 'dropped' as const, title: 'Dropped' }] : [])];
   const openItem = openId ? items.get(openId) : undefined;
-
-  const endDrag = () => {
-    setDragId(null);
-    setLifted(null);
-    setDropAt(null);
-  };
-
-  // The slot comes from the pointer's height, not from which card it's over: above a card's middle
-  // means "before it", so anywhere above the first card (header included) drops at the top.
-  const slotAt = (col: HTMLElement, y: number): string | null => {
-    for (const el of col.querySelectorAll<HTMLElement>('.card-wrap[data-item]')) {
-      if (el.dataset.item === dragId) continue;
-      const r = el.getBoundingClientRect();
-      if (y < r.top + r.height / 2) return el.dataset.item!;
-    }
-    return null;
-  };
-
-  /** Dropping the card back into its own slot changes nothing, so it gets no indicator and sends no op. */
-  const stays = (status: Status, beforeId: string | null, list: { id: string }[]) => {
-    const cur = dragId ? items.get(dragId) : undefined;
-    if (!cur || cur.status !== status) return false;
-    if (status === 'done') return true;
-    const i = list.findIndex(x => x.id === cur.id);
-    return (list[i + 1]?.id ?? null) === beforeId;
-  };
 
   return (
     <div className="app">
@@ -159,38 +161,16 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
         filter={<FilterMenu filters={filters} onChange={setFilters} {...facets} />}
         onNew={() => setComposer('backlog')}
       />
-      <div className="board">
+      <Flip watch={items} hint={flipHint} className={`board${drag ? ' dragging' : ''}`}>
         {columns.map(col => {
-          let list = columnItems(visible, col.key);
-          let older = 0;
-          if (col.key === 'done' && !searching && !showOlder) {
-            const recent = list.filter(i => isRecentDone(i));
-            older = list.length - recent.length;
-            list = recent;
-          }
+          const { list, older } = lists.get(col.key)!;
           const isCol = col.key !== 'done' && col.key !== 'dropped';
-          const ordered = col.key !== 'done';
-          const here = dragId && dropAt?.status === col.key ? dropAt : null;
+          const over = drag?.over?.status === col.key ? drag.over : null;
+          // Cards from the open seam down make room for the card in hand.
+          const from = over ? (over.beforeId ? list.findIndex(i => i.id === over.beforeId) : list.length) : -1;
+          const shiftAt = (i: number) => (over && i >= from ? drag!.shift : 0);
           return (
-            <div
-              key={col.key}
-              className={`col${here && !ordered ? ' drop-target' : ''}`}
-              onDragOver={(e: DragEvent) => {
-                if (!dragId) return;
-                e.preventDefault();
-                const beforeId = ordered ? slotAt(e.currentTarget as HTMLElement, e.clientY) : null;
-                const next = stays(col.key, beforeId, list) ? null : { status: col.key, beforeId };
-                if (next?.status !== dropAt?.status || next?.beforeId !== dropAt?.beforeId) setDropAt(next);
-              }}
-              onDrop={(e: DragEvent) => {
-                e.preventDefault();
-                const id = dragId;
-                const beforeId = ordered ? slotAt(e.currentTarget as HTMLElement, e.clientY) : null;
-                const noop = stays(col.key, beforeId, list);
-                endDrag();
-                if (id && !noop) void client.send({ op: 'move', id, status: col.key, beforeId });
-              }}
-            >
+            <div key={col.key} className="col" data-col={col.key}>
               <div className="col-hd">
                 <Glyph status={col.key} />
                 <span className="title">{col.title}</span>
@@ -208,36 +188,32 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
                     }}
                   />
                 )}
-                {list.map(it => (
+                {over && <div className="drop-zone" style={{ top: over.zoneTop, height: drag!.h }} />}
+                {list.map((it, i) => (
                   <Card
                     key={it.id}
                     item={it}
                     items={items}
                     arrived={arrived.has(it.id)}
                     onOpen={() => setOpen(it.id)}
-                    dnd={{
-                      lifted: lifted === it.id && dragId === it.id,
-                      dropBefore: ordered && here?.beforeId === it.id,
-                      onDragStart: e => {
-                        e.dataTransfer.setData('text/plain', it.id);
-                        e.dataTransfer.effectAllowed = 'move';
-                        setDragId(it.id);
-                        // Wait a frame so the browser's drag image is the real card, not the ghost.
-                        requestAnimationFrame(() => setLifted(it.id));
-                      },
-                      onDragEnd: endDrag,
-                    }}
+                    dnd={{ lifted: drag?.id === it.id, shift: shiftAt(i), onPointerDown: e => onPointerDown(it.id, e) }}
                   />
                 ))}
-                {ordered && here && here.beforeId === null && <div className="drop-end" />}
-                {list.length === 0 && composer !== col.key && <div className="col-empty">{searching ? 'No matches' : ''}</div>}
-                {older > 0 && <button className="older" onClick={() => setShowOlder(true)}>Show {older} older</button>}
-                {showOlder && col.key === 'done' && !searching && <button className="older" onClick={() => setShowOlder(false)}>Show recent only</button>}
+                <div className="col-tail" style={over ? { translate: `0 ${drag!.shift}px` } : undefined}>
+                  {list.length === 0 && composer !== col.key && <div className="col-empty">{searching ? 'No matches' : ''}</div>}
+                  {older > 0 && <button className="older" onClick={() => setShowOlder(true)}>Show {older} older</button>}
+                  {showOlder && col.key === 'done' && !searching && <button className="older" onClick={() => setShowOlder(false)}>Show recent only</button>}
+                </div>
               </div>
             </div>
           );
         })}
-      </div>
+      </Flip>
+      {drag && items.get(drag.id) && (
+        <DragFloat drag={drag} floatRef={floatRef}>
+          <Card item={items.get(drag.id)!} items={items} onOpen={() => {}} />
+        </DragFloat>
+      )}
       {conn === 'offline' && <div className="status-line"><span className="d" />Reconnecting…</div>}
       {openItem && (
         <DetailSheet key={openItem.id} item={openItem} items={items} board={board} client={client} onClose={() => setOpen(null)} onOpen={id => setOpen(id)} />
