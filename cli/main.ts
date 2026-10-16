@@ -80,7 +80,7 @@ const { values: o, positionals } = (() => {
   } catch (e) {
     console.error(c.red((e as Error).message));
     console.error(c.dim('Run `punch --help` for usage.'));
-    process.exit(2);
+    process.exit(2); // nothing large has been written yet
   }
 })();
 
@@ -447,11 +447,19 @@ async function run() {
   }
 }
 
+/**
+ * Exits once everything written so far has reached stdout and stderr. Writes to a pipe are
+ * asynchronous, so a bare process.exit() cut `punch list --json | jq` off at 64 KB.
+ */
+function exit(code: number) {
+  process.stdout.write('', () => process.stderr.write('', () => process.exit(code)));
+}
+
 run().then(
-  () => process.exit(0),
+  () => exit(0),
   e => {
     if (o.json && !(e instanceof UsageError)) printJson({ ok: false, error: e instanceof ApiError ? (e.opError ?? { message: e.message }) : { message: (e as Error).message } });
     else info(c.red(`${(e as Error).message}${e instanceof NetworkError ? '.' : ''}`));
-    process.exit(e instanceof UsageError ? 2 : 1);
+    exit(e instanceof UsageError ? 2 : 1);
   },
 );
