@@ -1,7 +1,7 @@
 # Punchlist — PRD
 
 - **Name:** Punchlist. CLI: `punch`. npm: `@nnewberg/punchlist`.
-- **Status:** v0.4. M1 and M2 are built and live at https://punchlist.nnewberg.workers.dev, and M4's deterministic GitHub sync is built (§9.1 step 1). What was decided while building is in §12.
+- **Status:** v0.5. M1 and M2 are built and live at https://punchlist.nnewberg.workers.dev. M4's deterministic GitHub sync is built (§9.1 step 1), and so is the Claude Code plugin (M3, §9.1 step 2). What was decided while building is in §12.
 - **Date:** 2026-10-16 (v0.2: 2026-10-14)
 - **Owner:** Nick
 - **Source:** [Agentic TODOs Brainstorm.md](Agentic%20TODOs%20Brainstorm.md) (voice memo), plus follow-up decisions
@@ -302,16 +302,16 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
   - it is managed through the plugin
   - status must not be copied into CLAUDE.md or into docs
 - **FR-24 Session hooks:**
-  - **SessionStart:** injects the compact board, including claims held by other people.
-  - **UserPromptSubmit / Stop:** renew this session's claims.
-  - **SessionEnd:** releases them.
-- **FR-25 Local commits.** A PostToolUse hook on `git commit` records commits that contain closing trailers as "committed locally, not pushed" on the cited items. Everyone can then see that a fix exists before it is pushed. This is a should-have.
+  - **SessionStart:** injects the plugin's rules and the compact board, including claims held by other people. It also gives Claude's shell the session id, so every `punch` call Claude makes records the session.
+  - **UserPromptSubmit / Stop:** renew this session's claims, at most every 5 minutes, in the background.
+  - **SessionEnd:** releases them. A session that dies without it loses its claims 2 hours after its last heartbeat (FR-28).
+- **FR-25 Local commits.** A PostToolUse hook on `git commit` records commits that contain closing trailers as "committed locally, not pushed" on the cited items. Everyone can then see that a fix exists before it is pushed. This is a should-have. **Deferred (2026-10-16):** pushing the branch already shows "fix on …" (FR-31).
 - **FR-25a Team onboarding.** Every collaborator uses Claude Code, so setup should take a single command per person:
   - The repo's committed `.claude/settings.json` lists the plugin, so teammates are offered it when they open the repo in Claude Code. Adding that is a normal repo change made by the team; the tool doesn't do it.
   - On first use, the plugin runs `punch login` (GitHub device flow) inside the session.
   - If the plugin isn't installed or logged in, SessionStart prints a one-line notice instead of failing quietly.
 
-  Check the current Claude Code project-plugin settings before M3.
+  Checked against Claude Code 2.1.301 while building M3; see §12.
 
 ### 7.6 Claims and presence
 - **FR-26 How a claim is made:**
@@ -438,7 +438,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 |---|---|---|---|
 | **M1 Service core** | Worker, board Durable Object, data model, event log, REST API, GitHub App install + sign-in, CLI basics (FR-1–9, 17–20) | Nick and a second account edit the same board from two CLIs, and each sees the other's changes | **Built and live.** Proven locally with two dev identities. `punch` 0.1.0 is on npm. Not yet tried with Aaron's or Kevin's real accounts. |
 | **M2 Web board** | FR-10–16 | Two browsers stay in sync live, with drag, edit, presence, history and undo | **Built and live** |
-| **M3 Claude plugin** | Skill, commands, hooks, claims, onboarding (FR-21–28) | S1, S2, S4 and S10 work across two machines, and a teammate goes from a fresh clone to a working plugin with one command | Not started |
+| **M3 Claude plugin** | Skill, commands, hooks, claims, onboarding (FR-21–28) | S1, S2, S4 and S10 work across two machines, and a teammate goes from a fresh clone to a working plugin with one command | **Built** (FR-21–24, FR-25a, session claims with heartbeat and lapse). S1, S2, S4 and S10 pass on production as `claude -p` runs (2026-10-16), with a second session of Nick's playing the other person. Still to do: a second GitHub account for a true two-person run; npm publish of `punch` 0.2.0; the repo going public so teammates can install the plugin |
 | **M4 GitHub auto-close** | Webhooks, explicit closes, pending-on-branch, PR links, reverts, inferred closes (FR-29–34) | S5–S9 work on a real repo | **Deterministic sync built** (FR-26 branch claims, FR-29–31, FR-33, FR-34), with acceptance tests against `nnewberg/punchlist-sandbox`; S4, S5 (squash, merge and rebase), S6, S8 and S9 pass on production (2026-10-16). Inferred closes (FR-32) are step 3 of §9.1 |
 | **M5 Migrate and dogfood** | Imports (FR-36–39), My work (FR-35) | Both repos are imported, Aaron and Kevin are onboarded, and the §10 metrics are tracked | My work is built; the imports are not |
 
@@ -450,7 +450,7 @@ Automated syncing comes **before** any import. An imported board without auto-cl
    - Build webhook intake (FR-29), branch claims (FR-26), explicit closes and pending-on-branch (FR-30, FR-31), and PR links and reverts (FR-33).
    - Test each scenario as a script that runs real `git` and `gh` against the sandbox, then asserts what the board shows (S5–S9).
    - These scripts become repeatable acceptance tests.
-2. **The Claude Code plugin (M3).**
+2. **The Claude Code plugin (M3).** *Built 2026-10-16; see §12.*
    - Skill, `/punch` commands, hooks, and session claims with heartbeat and TTL expiry (FR-21–28).
    - Tested with headless Claude Code agents (`claude -p`) in two sandbox clones acting as two people (S1, S2, S4, S10).
 3. **Inferred closes (FR-32).**
@@ -520,7 +520,7 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 **CLI**
 - Published as the public npm package `@nnewberg/punchlist` (client code only).
 - Publishing needs Nick's security-key 2FA, so `npm publish` runs in his own terminal, not from an agent.
-- 0.1.1, which lowers the Node requirement to 20, is built but unpublished.
+- 0.2.0 is built but unpublished. It adds `search`, `add --deferred`, `login --start/--finish` and `hook`, and lowers the Node requirement to 20.
 
 **UI words**
 - The `dropped` status is shown as **Delete** (trash icon, Undo toast). It's still the soft delete from §6.1, and the CLI command keeps the name `drop`.
@@ -543,4 +543,24 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - **Reverts.** `This reverts commit <sha>` (including a reverted merge commit, matched through its PR) and GitHub's Revert button (`Reverts owner/repo#N`) mark those closes reverted. An item with no other close reopens to the column it was in before, unclaimed, with a note. A revert's quoted subject (`Revert "Fix BT-9"`) never counts as a close.
 - **Who it's from.** GitHub changes are logged as the pusher, commit author or PR merger, `via github`. Citations keep full SHAs and show 7 characters.
 - **Not yet:** membership-change events (the 10-minute access recheck covers them for now), and inferred closes (step 3).
+
+**Claude Code plugin (M3)**
+- **Where it lives.** `plugins/punchlist`, with this repo as its marketplace (`.claude-plugin/marketplace.json`; install id `punchlist@punchlist`).
+  - Teammates can't fetch a plugin from a private repo, so `nnewberg/punchlist` is to be made public (decided with Nick). Boards stay private either way.
+  - The plugin has no `version`, so installs follow commits through auto-update.
+- **The CLI inside it.** `bin/punch` installs the `punch` version named in `cli-version` into the plugin's data folder on first use, then runs it. The first run takes about 1 s, later runs about 30 ms.
+  - SessionStart puts that `bin` first on the PATH of Claude's shell. A global `punch` would otherwise shadow it, because Claude Code appends plugin `bin/` folders after nvm's.
+- **Rules every session.** The must-follow rules (`rules.md`) are printed by SessionStart, because a skill only loads when Claude decides it's relevant. The `punchlist` skill holds the details. The rules live in the plugin, so changing them doesn't need an npm publish.
+- **Two refinements from the acceptance runs.** Both were behaviors Claude got wrong until the rules spelled them out:
+  - A similar topic isn't a duplicate. A different service, screen or scope is a new item, and when unsure Claude adds it and mentions the similar one. A true duplicate gets an "Asked again" note.
+  - Work the user says to leave for later is filed as deferred work too, not only work Claude chooses to defer.
+- **Session claims** (FR-24, FR-28).
+  - A claim made through `punch` inside a Claude session is a `session` claim, tagged with that session.
+  - The board records each session's last heartbeat, writing it to SQLite at most every 10 minutes.
+  - A Durable Object alarm releases session claims 2 hours after their session's last heartbeat. The release is logged as `via reconciler` with "Claim lapsed…".
+  - SessionEnd releases the session's claims ("Released when the Claude session ended"). That includes `/clear`, which starts a new session.
+- **Same person, two sessions.** If your other Claude session holds an item, a claim from this session is refused ("Your other Claude session has X") unless `--steal`. A session claim never replaces your own branch or hand-made claim; it's a no-op.
+- **Item source.** Clients may set an item's `source` only to `chat`, `claude-deferred` or `cli`.
+- **Sign-in from a session.** `punch login --start` prints the code, and `punch login --finish` waits for it, because Claude can't show output from a command that's still running.
+- **Acceptance.** `acceptance/plugin.mjs` runs headless `claude -p --plugin-dir` sessions in a sandbox clone, using Sonnet, at about a dollar a run. A `-p` session ends, and so releases its claims, as soon as it answers. So "someone is working on it right now" is set up as a live claim made directly with `punch`, under another session.
 

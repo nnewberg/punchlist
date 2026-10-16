@@ -8,8 +8,34 @@ A shared, live TODO board for each repo that keeps itself up to date. See [PRD.m
 
 - The `punch` CLI ([cli/README.md](cli/README.md)): GitHub device-flow login, the board for the repo you're in, offline reads and an outbox.
 - GitHub sync, from the App's push, pull request, create and delete webhooks. The rules are below.
+- The Claude Code plugin ([plugins/punchlist](plugins/punchlist/README.md)). Claude:
+  - starts each session knowing the board
+  - adds items without duplicating them
+  - claims what it works on, and won't take what someone else holds
+  - files work it leaves for later
 
-**Not built yet:** the Claude Code plugin, `punch import`, and inferred closes.
+**Not built yet:** `punch import`, and inferred closes.
+
+## Using it with Claude Code
+
+Install it in Claude Code:
+
+```
+/plugin install punchlist --marketplace nnewberg/punchlist
+```
+
+To offer the plugin to everyone who opens a repo, commit this to the repo's `.claude/settings.json`. `punch init` prints it too.
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "punchlist": { "source": { "source": "github", "repo": "nnewberg/punchlist" }, "autoUpdate": true }
+  },
+  "enabledPlugins": { "punchlist@punchlist": true }
+}
+```
+
+Then each person runs `/punch login` once. Claims a Claude session makes are released when it ends, and lapse after 2 hours without activity if it dies.
 
 ## How GitHub keeps the board current
 
@@ -59,7 +85,8 @@ npm run build:cli && node cli/dist/punch.mjs --help
   PUNCH_HOME=/tmp/nick  node cli/dist/punch.mjs login --dev nick  --url http://localhost:5173
   PUNCH_HOME=/tmp/aaron node cli/dist/punch.mjs login --dev aaron --url http://localhost:5173
   ```
-- **Publishing:** `npm run build:cli`, then `cd cli && npm publish`.
+- **Publishing:** `npm run build:cli`, then `cd cli && npm publish`. The plugin runs the version in `plugins/punchlist/cli-version`; bump that after publishing.
+- **The plugin against this checkout:** `PUNCH_CLI=$PWD/cli/dist/punch.mjs claude --plugin-dir plugins/punchlist`.
 
 ## How sign-in and access work
 
@@ -78,7 +105,7 @@ npm run build:cli && node cli/dist/punch.mjs --help
 
   A role is re-checked once it's 10 minutes old.
 
-## Acceptance tests (GitHub sync)
+## Acceptance tests
 
 `npm run acceptance` runs scenarios S4–S9 for real against the live Worker and the private sandbox repo `nnewberg/punchlist-sandbox`, which has the App installed. Each scenario adds fresh items with the built `punch`, pushes branches and merges PRs with `git` and `gh` in a throwaway clone, then waits for the board to show the result.
 
@@ -88,6 +115,18 @@ npm run acceptance -- S5 S9   # some
 ```
 
 It needs `punch login` and `gh` signed in with push access to the sandbox. They test what's deployed, so run them after a merge to `main` has deployed.
+
+`npm run acceptance:plugin` runs S1, S2, S4 and S10 the same way, with headless Claude Code (`claude -p --plugin-dir plugins/punchlist`) in a sandbox clone:
+
+| Scenario | Checks |
+|---|---|
+| S1 | adding by chat, and a near-duplicate becoming a note |
+| S2 | work left for later being filed |
+| S4 | claiming before work, releasing when the session ends, and not taking an item someone else holds |
+| S10 | the board in Claude's context at session start |
+
+- **Second person.** Sign a second GitHub account (with write access to the sandbox) in under its own home with `PUNCH_HOME=~/.config/punchlist-b punch login`, and pass `PUNCH_HOME_B=~/.config/punchlist-b`. Without it, your own second session plays the other person.
+- **Cost.** Model calls are real: about a dollar a run with Sonnet.
 
 ## Deploy
 
@@ -113,7 +152,8 @@ CI deploys on every merge to `main` (`.github/workflows/deploy.yml`). First-time
 | `worker/board.ts` | `BoardDO`: SQLite items and event log, hibernating WebSockets, undo, catch-up after reconnect. |
 | `worker/auth.ts`, `worker/github.ts`, `worker/directory.ts` | Sessions; the GitHub App (JWT, installation tokens, permission checks, PR lookups); the D1 board directory and roles. |
 | `worker/webhook.ts`, `worker/ingest.ts`, `shared/github.ts` | GitHub sync: webhook payloads to facts (Worker), facts to board ops (Durable Object), and reading commit messages and branch names. |
-| `acceptance/` | Scenario tests against the live Worker and the sandbox repo. |
+| `acceptance/` | Scenario tests against the live Worker and the sandbox repo: `run.mjs` (GitHub sync), `plugin.mjs` (the Claude Code plugin). |
+| `plugins/punchlist/`, `.claude-plugin/` | The Claude Code plugin (hooks, skills, `rules.md`, the `bin/punch` launcher), with this repo as its marketplace. |
 | `migrations/` | D1 schema: users, sessions, boards, access, API tokens. |
 | `cli/` | The `punch` CLI (npm `@nnewberg/punchlist`), bundled with the shared board code into one file. |
 | `web/` | React app. `boardClient.ts` is the live store; `components/` holds the UI. |

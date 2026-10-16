@@ -15,7 +15,8 @@
     "db:local": "wrangler d1 migrations apply DB --local",
     "build:cli": "node cli/build.mjs",
     "test:cli": "vitest run --config cli/vitest.config.ts",
-    "acceptance": "npm run build:cli && node acceptance/run.mjs"
+    "acceptance": "npm run build:cli && node acceptance/run.mjs",
+    "acceptance:plugin": "npm run build:cli && node acceptance/plugin.mjs"
   },
   "dependencies": {
     "fractional-indexing": "^3.4.0",
