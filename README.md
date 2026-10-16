@@ -6,7 +6,9 @@ A shared, live TODO board for each repo that keeps itself up to date. See [PRD.m
 - The web board (design 1b, "Warm board", dark) on a Cloudflare Worker with one Durable Object per board. Two browsers stay in sync for drag, edit, notes, claims, presence, history and undo.
 - GitHub sign-in. Each repo with the Punchlist GitHub App installed gets a board, and who can see or change it follows their access to the repo.
 
-**Not built yet:** the CLI and its device-flow login, the Claude Code plugin, and push/PR webhooks for auto-close.
+- The `punch` CLI ([cli/README.md](cli/README.md)): GitHub device-flow login, the board for the repo you're in, offline reads and an outbox.
+
+**Not built yet:** the Claude Code plugin, `punch import`, and push/PR webhooks for auto-close.
 
 ## Run it
 
@@ -30,9 +32,22 @@ npm run dev                   # applies local D1 migrations, then http://localho
 - **Other pages:** `/me` is My work. `/_states` (dev only) is the card-states gallery used for visual QA.
 - **Real GitHub sign-in locally:** once the App exists (below), its settings are in `.dev.vars`. Set `DEV_MODE=0` there and sign in at http://localhost:5173.
 
+## The CLI
+
+```sh
+npm run build:cli && node cli/dist/punch.mjs --help
+```
+
+- **Locally, as two people:** each shell gets its own `PUNCH_HOME`, and logs in against the dev server with a sample person:
+  ```sh
+  PUNCH_HOME=/tmp/nick  node cli/dist/punch.mjs login --dev nick  --url http://localhost:5173
+  PUNCH_HOME=/tmp/aaron node cli/dist/punch.mjs login --dev aaron --url http://localhost:5173
+  ```
+- **Publishing:** `npm run build:cli`, then `cd cli && npm publish`.
+
 ## How sign-in and access work
 
-- **Sign-in.** The only way in is GitHub, through the App's user authorization.
+- **Sign-in.** The only way in is GitHub, through the App's user authorization. The CLI uses GitHub's device flow, which the Worker runs, and gets a Punchlist API token: one per machine, stored hashed, and revocable (`punch logout`, or `DELETE /v1/me/tokens/:id`).
   - The session is a random token in an HttpOnly cookie, stored only as a hash. It rolls forward for 90 days while it's used.
   - A browser that has signed in before goes back through GitHub on its own when the session ends.
   - No GitHub token is stored.
@@ -70,12 +85,13 @@ CI deploys on every merge to `main` (`.github/workflows/deploy.yml`). First-time
 | `worker/index.ts` | Routes: `/v1` (REST and WebSocket), `/auth` (sign-in), `/github` (webhook, post-install). Everything else is static assets. |
 | `worker/board.ts` | `BoardDO`: SQLite items and event log, hibernating WebSockets, undo, catch-up after reconnect. |
 | `worker/auth.ts`, `worker/github.ts`, `worker/directory.ts` | Sessions; the GitHub App (JWT, installation tokens, permission checks); the D1 board directory and roles. |
-| `migrations/` | D1 schema: users, sessions, boards, access. |
+| `migrations/` | D1 schema: users, sessions, boards, access, API tokens. |
+| `cli/` | The `punch` CLI (npm `@nnewberg/punchlist`), bundled with the shared board code into one file. |
 | `web/` | React app. `boardClient.ts` is the live store; `components/` holds the UI. |
 | `test/` | Vitest in the Workers runtime (`npm test`), with GitHub faked for sign-in and access. |
 
 ## Checks
 
 ```sh
-npm test && npm run typecheck && npm run build
+npm test && npm run typecheck && npm run build && npm run build:cli
 ```
