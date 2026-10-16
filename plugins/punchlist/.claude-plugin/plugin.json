@@ -1,0 +1,7 @@
+{
+  "name": "punchlist",
+  "description": "Claude keeps your repo's shared Punchlist board current: adds items, claims what it works on, files what it defers, and starts each session knowing the board.",
+  "author": { "name": "Nick Newberg" },
+  "homepage": "https://punchlist.nnewberg.workers.dev",
+  "repository": "https://github.com/nnewberg/punchlist"
+}

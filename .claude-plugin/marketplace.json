@@ -1,0 +1,12 @@
+{
+  "name": "punchlist",
+  "owner": { "name": "Nick Newberg" },
+  "metadata": { "description": "Punchlist: a live, shared TODO board for each repo" },
+  "plugins": [
+    {
+      "name": "punchlist",
+      "source": "./plugins/punchlist",
+      "description": "Claude keeps your repo's shared Punchlist board current: adds items, claims what it works on, files what it defers, and starts each session knowing the board."
+    }
+  ]
+}
