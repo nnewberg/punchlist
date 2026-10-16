@@ -1,8 +1,8 @@
 # Punchlist — PRD
 
 - **Name:** Punchlist. CLI: `punch`. npm: `@nnewberg/punchlist`.
-- **Status:** Draft v0.2. Rewritten around a hosted Cloudflare service for multi-user, live boards.
-- **Date:** 2026-10-14
+- **Status:** v0.3. M1 and M2 are built and live at https://punchlist.nnewberg.workers.dev. The build order for M3–M5 was revised (§9). What was decided while building is in §12.
+- **Date:** 2026-10-16 (v0.2: 2026-10-14)
 - **Owner:** Nick
 - **Source:** [Agentic TODOs Brainstorm.md](Agentic%20TODOs%20Brainstorm.md) (voice memo), plus follow-up decisions
 
@@ -351,6 +351,17 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 ### 7.9 Import (v1 acceptance tests)
 `punch import` runs locally against the repo's files and git history. It shows a dry-run report first and only writes to the board after the report is confirmed. It never edits repo files.
 
+**Approach (decided 2026-10-16): Punchlist's model comes first; imports adapt to it.**
+- `punch import` takes one general, documented JSON format in Punchlist's own item shape. It shows a dry run, writes in bulk, and accepts existing IDs.
+- Each source repo gets a **one-time translation** into that format. The translation is done with judgment (by Claude, reviewed by people), not by parsers built into Punchlist.
+- Preserving a source's format exactly is not a goal. What matters:
+  - Keep the IDs, because they're referenced in commits, branches and docs. An ID that doesn't fit `PREFIX-NNN`, like BT-007a, gets a new number and keeps its old one as an alias.
+  - Get statuses right.
+  - Keep each item's substance.
+- Fields that Punchlist has no concept of are dropped or folded into the body.
+- Review happens on a single table before anything is written: ID, title, proposed status and column, and a one-line reason for each status call. It's shared with the other people on the repo.
+- The per-repo rules below are guidance for the translation, not features of `punch import`.
+
 - **FR-36 big-talk:**
   - `docs/tickets/BT-*.md` → items
     - IDs are kept; `BT-007a` becomes an alias
@@ -416,15 +427,31 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
   - Worker logs, plus the event log, are the audit trail
 
 ## 9. Milestones
-| Milestone | Scope | Done when |
-|---|---|---|
-| **M1 Service core** | Worker, board Durable Object, data model, event log, REST API, GitHub App install + sign-in, CLI basics (FR-1–9, 17–20) | Nick and a second account edit the same board from two CLIs, and each sees the other's changes |
-| **M2 Web board** | FR-10–16 | Two browsers stay in sync live, with drag, edit, presence, history and undo |
-| **M3 Claude plugin** | Skill, commands, hooks, claims, onboarding (FR-21–28) | S1, S2, S4 and S10 work across two machines, and a teammate goes from a fresh clone to a working plugin with one command |
-| **M4 GitHub auto-close** | Webhooks, explicit closes, pending-on-branch, PR links, reverts, inferred closes (FR-29–34) | S5–S9 work on a real repo |
-| **M5 Migrate and dogfood** | Imports (FR-36–39), My work (FR-35) | Both repos are imported, Aaron and Kevin are onboarded, and the §10 metrics are tracked |
+| Milestone | Scope | Done when | Status (2026-10-16) |
+|---|---|---|---|
+| **M1 Service core** | Worker, board Durable Object, data model, event log, REST API, GitHub App install + sign-in, CLI basics (FR-1–9, 17–20) | Nick and a second account edit the same board from two CLIs, and each sees the other's changes | **Built and live.** Proven locally with two dev identities. `punch` 0.1.0 is on npm. Not yet tried with Aaron's or Kevin's real accounts. |
+| **M2 Web board** | FR-10–16 | Two browsers stay in sync live, with drag, edit, presence, history and undo | **Built and live** |
+| **M3 Claude plugin** | Skill, commands, hooks, claims, onboarding (FR-21–28) | S1, S2, S4 and S10 work across two machines, and a teammate goes from a fresh clone to a working plugin with one command | Not started |
+| **M4 GitHub auto-close** | Webhooks, explicit closes, pending-on-branch, PR links, reverts, inferred closes (FR-29–34) | S5–S9 work on a real repo | Not started. App webhooks only handle installs and renames (FR-1) so far |
+| **M5 Migrate and dogfood** | Imports (FR-36–39), My work (FR-35) | Both repos are imported, Aaron and Kevin are onboarded, and the §10 metrics are tracked | My work is built; the imports are not |
 
-This repo is the first board from M1 on. Before M1 it needs to be set up as `nnewberg/punchlist` on GitHub; it is not a git repo yet.
+### 9.1 Build order from here (revised 2026-10-16)
+Automated syncing comes **before** any import. An imported board without auto-close starts drifting on day one, which is exactly what success criterion 3 rules out. It would also make Aaron's real board the first place auto-close is ever tested.
+
+1. **A sandbox, plus deterministic GitHub sync (M4, minus inferred closes).**
+   - Create the private repo `nnewberg/punchlist-sandbox` and install the App on it. Its board then appears automatically, since `nnewberg` is on the allowed-owners list.
+   - Build webhook intake (FR-29), branch claims (FR-26), explicit closes and pending-on-branch (FR-30, FR-31), and PR links and reverts (FR-33).
+   - Test each scenario as a script that runs real `git` and `gh` against the sandbox, then asserts what the board shows (S5–S9).
+   - These scripts become repeatable acceptance tests.
+2. **The Claude Code plugin (M3).**
+   - Skill, `/punch` commands, hooks, and session claims with heartbeat and TTL expiry (FR-21–28).
+   - Tested with headless Claude Code agents (`claude -p`) in two sandbox clones acting as two people (S1, S2, S4, S10).
+3. **Inferred closes (FR-32).**
+   - Evaluated against big-talk's real git history and its ticket set.
+   - That same run proposes fixes to big-talk's stale statuses (FR-38), so drift reconciliation uses the real feature rather than a one-off.
+4. **Imports (M5)**, with all of the above switched on from day one (§7.9).
+
+The sandbox runs on the production Worker, not a staging copy. Boards are isolated from each other, so this is fine at this scale and saves running a second deployment and App.
 
 ## 10. Success criteria
 1. **Live and the same for everyone.** A change by one person appears on the other's open board within 1 s (p95). Over the dogfood period there are zero reports of two people seeing different states.
@@ -445,7 +472,7 @@ This repo is the first board from M1 on. Before M1 it needs to be set up as `nne
 | Q1 | **futureleisurefoundation data ownership.** Nick is an org admin, so he can install the App and approve sending diffs to Anthropic himself. big-talk already uses Claude Code, so this adds no new exposure. What remains: big-talk's board lives in Nick's personal Cloudflare account while the repo belongs to the org. | Keep one deployment on Nick's account, since it also serves the personal bulletin-bee repo. Make the nightly R2 export of org boards available to org admins (or mirror it to org-owned storage) so the org never depends on Nick's account to get its data. Revisit if the org adds more members. |
 | Q2 | ~~Do Aaron and Kevin use Claude Code?~~ **Resolved: yes, both do.** | The plugin is the main interface, and its onboarding is part of v1 (FR-25a). Because every agent runs the hooks, claims and duplicate-work warnings (S4) cover the whole team. |
 | Q3 | **CLI or remote MCP for agents?** | CLI in v1, because hooks need it anyway. The Worker could also expose a remote MCP server later, with no change to the data model. |
-| Q4 | ~~URL~~ **Resolved: a custom domain is optional.** | **Address:** start on `punchlist.<account>.workers.dev`. One deployment serves every board, so the address belongs to the service, not to any one repo; bulletin-bee not having a domain doesn't matter. **Config:** the base URL is a single setting that the CLI and plugin read. **Adding a domain later:** `workers.dev` stays active alongside it, the GitHub App lists both callback URLs, CLI tokens stay valid, and browsers re-sign-in once through GitHub automatically. **Which domain:** prefer a personal one over `getbigtalk.com`, which is the org's product domain. The repo is `nnewberg/punchlist` (personal), deployed to Nick's Cloudflare account. |
+| Q4 | ~~URL~~ **Resolved: a custom domain is optional.** | **Address:** https://punchlist.nnewberg.workers.dev (live). It started as `punchlist.<account>.workers.dev`. One deployment serves every board, so the address belongs to the service, not to any one repo; bulletin-bee not having a domain doesn't matter. **Config:** the base URL is a single setting that the CLI and plugin read. **Adding a domain later:** `workers.dev` stays active alongside it, the GitHub App lists both callback URLs, CLI tokens stay valid, and browsers re-sign-in once through GitHub automatically. **Which domain:** prefer a personal one over `getbigtalk.com`, which is the org's product domain. The repo is `nnewberg/punchlist` (personal), deployed to Nick's Cloudflare account. |
 | Q5 | ~~What happens to imported source files?~~ **Resolved: they are retired and replaced by a pointer to the board.** | After import, these files are replaced by a short pointer to the board: big-talk's `docs/tickets/`, `TODO.md` and CLAUDE.md Status section; bulletin-bee's `PLAN.md` and `FEEDBACK.md`. Ticket specs move into item bodies, and PLAN milestones become tags. The team commits these edits as part of M5; the tool never edits repo files itself. |
 | Q6 | **A "Deployed" signal beyond "merged".** | Later. big-talk could report deploys from its workflow, but bulletin-bee deploys by hand. A `punch deployed <sha>` hook could cover both. |
 | Q7 | ~~Claude filing deferred work without asking (S2)~~ **Resolved: Claude files it automatically.** | Items are tagged `claude-deferred` and mentioned in one line. A per-board setting switches to suggest-only if it gets noisy. |
@@ -463,3 +490,38 @@ This repo is the first board from M1 on. Before M1 it needs to be set up as `nne
 | **Local-first sync engines** (InstantDB, Zero, ElectricSQL, Jazz) | Young. Clients other than browsers (CLI, webhooks) are second-class. Some need a Postgres you run yourself. |
 | **Self-hosted server** (Node + SQLite on Fly or a VPS) | Same WebSocket work as Durable Objects, plus owning uptime, TLS and backups. |
 | **GitHub Projects + Issues as the backend** | Multi-user and auto-close work today, but the board is GitHub's: slower, with no agent presence, and the ticket-system feel the memo wanted to avoid. |
+
+## 12. Decisions made while building (as of 2026-10-16)
+
+**Deployment**
+- **Live at** https://punchlist.nnewberg.workers.dev, on Nick@newbergfamily.net's Cloudflare account (Workers Free plan for now; upgrade to Paid at about 10 boards or users, §8).
+- **Storage:** D1 database `punchlist` holds users, sessions, boards, access and API tokens. The board data lives in each board's Durable Object, named `repo:<GitHub repo id>`.
+- **Deploys:** GitHub Actions on every merge to `main`. The `CLOUDFLARE_API_TOKEN` repo secret has Workers Scripts and D1 edit rights. Database migrations run in CI.
+
+**GitHub App: "Punchlist Board"** (slug `punchlist-board`; GitHub reserves the name "Punchlist")
+- Owned by `nnewberg`, installable by any account. Only `ALLOWED_OWNERS` (`nnewberg`, `futureleisurefoundation`) get boards.
+- Installed on big-talk, bulletin-bee and punchlist.
+- Permissions: metadata, contents and pull requests, all read. Device Flow is enabled.
+- Webhook events today: installation, installation repositories and repository. **M4 needs push, pull_request, create and delete ticked** under the App's "Permissions & events". Nick has to do that by hand; there's no API for it.
+
+**Sign-in and access**
+- **Web:** a rolling 90-day session cookie, stored hashed. A browser that has signed in before re-authenticates silently through GitHub when the session ends.
+- **CLI:** GitHub's device flow, run by the Worker, ends in a per-machine `pl_…` token kept in the OS keychain. List and revoke them through `/v1/me/tokens`.
+- **Roles:** repo write or admin means edit; read means **view only** (the board and sheet are read-only, and ops are refused); none means 404. Roles are checked with the App's installation token, cached 10 minutes in D1, and memoized for 1 minute per isolate.
+
+**CLI**
+- Published as the public npm package `@nnewberg/punchlist` (client code only).
+- Publishing needs Nick's security-key 2FA, so `npm publish` runs in his own terminal, not from an agent.
+- 0.1.1, which lowers the Node requirement to 20, is built but unpublished.
+
+**UI words**
+- The `dropped` status is shown as **Delete** (trash icon, Undo toast). It's still the soft delete from §6.1, and the CLI command keeps the name `drop`.
+- Columns can't be reordered; the order is the workflow.
+- Item IDs are never reused, so gaps after deletes are expected.
+
+**Imports**
+- See §7.9's approach note. Big-talk findings to carry into its translation:
+  - 35 tickets in `docs/tickets/`. `BT-034-design-prompt.md` is an attachment to BT-034, not a ticket.
+  - The free-text Status lines are often stale. BT-008, for one, shipped in `cc16d77`.
+  - Only about 7 of 285 commits cite a ticket ID, so drift has to be found by inference (step 3 of §9.1).
+
