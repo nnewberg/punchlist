@@ -38,7 +38,10 @@ export interface Citation {
   /** Full SHA; shown shortened. */
   commit?: string;
   pr?: number;
+  /** Where it was pushed: the fix's branch while pending, the default branch once it closes. */
   branch?: string;
+  /** The branch the change was made on: a merged PR's head branch. Unknown for a direct push to main. */
+  head?: string;
   how: 'explicit' | 'inferred' | 'manual' | 'branch';
   confidence: number | null;
   author?: string;
@@ -100,8 +103,11 @@ export type Op =
   // Server-internal ops produced from GitHub events (FR-26–34); clients can't send these.
   /** A closing citation moves the item to Done (or just adds the link if it's already closed); a pending one adds the badge. */
   | { op: 'cite'; id: string; citation: Omit<Citation, 'at'> }
-  /** Attaches a merged PR's number to the citations and notes from its commits (FR-33). */
-  | { op: 'link_pr'; id: string; pr: number; commits: string[] }
+  /**
+   * Attaches a merged PR's number to the citations and notes from its commits (FR-33), and its head
+   * branch to the closes citations from those commits or that PR.
+   */
+  | { op: 'link_pr'; id: string; pr: number; commits: string[]; head?: string }
   /** A revert landed: closes from these commits (by SHA prefix) or this PR stop counting, and the item reopens if nothing else closes it. */
   | { op: 'revert'; id: string; commits: string[]; prs: number[]; by: { commit: string; message?: string } }
   /** A branch was merged or deleted: its claim ends and its pending citations go (FR-28). */

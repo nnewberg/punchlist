@@ -288,12 +288,26 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
     }
     case 'link_pr': {
       const shas = new Set(op.commits);
-      let changed = false;
+      let linked = false;
+      let headed = false;
       // Pending fixes are left alone: the merge either closes the item, which drops them, or ends their branch.
-      it.citations = it.citations.map(x => (x.kind === 'closes' && x.commit && shas.has(x.commit) && x.pr !== op.pr ? ((changed = true), { ...x, pr: op.pr }) : x));
-      it.notes = it.notes.map(n => (n.commit && shas.has(n.commit) && n.pr !== op.pr ? ((changed = true), { ...n, pr: op.pr }) : n));
-      if (!changed) return { ok: true, noop: true, item: cur };
-      meta = { text: 'Linked to', ref: `PR #${op.pr}` };
+      // A push to main may have closed the item before the merge event arrived, so the head branch is added here too.
+      it.citations = it.citations.map(x => {
+        if (x.kind !== 'closes' || !((x.commit && shas.has(x.commit)) || x.pr === op.pr)) return x;
+        const y = { ...x };
+        if (y.pr !== op.pr) {
+          y.pr = op.pr;
+          linked = true;
+        }
+        if (op.head && !y.head) {
+          y.head = op.head;
+          headed = true;
+        }
+        return y;
+      });
+      it.notes = it.notes.map(n => (n.commit && shas.has(n.commit) && n.pr !== op.pr ? ((linked = true), { ...n, pr: op.pr }) : n));
+      if (!linked && !headed) return { ok: true, noop: true, item: cur };
+      meta = linked ? { text: 'Linked to', ref: `PR #${op.pr}` } : { text: 'Recorded the branch', ref: op.head };
       break;
     }
     case 'revert': {

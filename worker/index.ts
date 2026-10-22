@@ -141,6 +141,17 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
       return json(out, out.ok ? 200 : 409);
     }
 
+    // POST /heads {heads: {pr: branch}}: one-off backfill of merged PRs' head branches (scripts/backfill-heads.mjs).
+    if (rest[0] === 'heads' && rest.length === 1 && request.method === 'POST') {
+      if (!trusted) return json({ error: 'forbidden' }, 403);
+      if (role !== 'edit') return forbidden(readOnly);
+      const body = (await request.json().catch(() => null)) as { heads?: Record<string, unknown> } | null;
+      const entries = Object.entries(body?.heads ?? {});
+      const valid = entries.length <= 1000 && entries.every(([pr, ref]) => /^\d+$/.test(pr) && typeof ref === 'string' && ref.length > 0 && ref.length <= 255);
+      if (!body?.heads || !valid) return json({ ok: false, error: { code: 'invalid', message: 'Send {heads: {"<PR number>": "<branch>"}}' } }, 400);
+      return json(await stub.recordHeads(info, body.heads as Record<string, string>, actorFor(request, user)));
+    }
+
     // POST /session {action}: a Claude session's hooks keep its claims alive, or release them when it ends (FR-24).
     if (rest[0] === 'session' && rest.length === 1 && request.method === 'POST') {
       if (!trusted) return json({ error: 'forbidden' }, 403);

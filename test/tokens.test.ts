@@ -134,6 +134,17 @@ describe('ops from the CLI', () => {
     expect(viewer.status).toBe(403);
   });
 
+  it("can backfill closing PRs' head branches (PL-013), but not as a viewer or with a malformed body", async () => {
+    await setup();
+    const token = await cliToken();
+    const heads = (board: string, body: unknown) => call(`/v1/boards/${board}/heads`, { method: 'POST', token, body: JSON.stringify(body) });
+    expect(await (await heads('futureleisurefoundation/big-talk', { heads: { 9999: 'nothing-closed-by-it' } })).json()).toEqual({ ok: true, ids: [] });
+    expect((await heads('futureleisurefoundation/big-talk', { heads: { main: 'x' } })).status).toBe(400);
+    expect((await heads('futureleisurefoundation/big-talk', { heads: { 12: 42 } })).status).toBe(400);
+    expect((await heads('futureleisurefoundation/big-talk', {})).status).toBe(400);
+    expect((await heads('nnewberg/bulletin-bee', { heads: { 12: 'x' } })).status).toBe(403);
+  });
+
   it('can be sent as a batch that stops at the first refusal', async () => {
     await setup();
     const token = await cliToken();

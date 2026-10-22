@@ -1,6 +1,6 @@
 import type { PointerEvent } from 'react';
 import { person } from '../../shared/config';
-import { latestNote, openDeps } from '../../shared/derive';
+import { latestNote, openDeps, workBranch } from '../../shared/derive';
 import type { Item } from '../../shared/types';
 import { Avatar, BranchIcon } from './ui';
 
@@ -13,7 +13,8 @@ export interface CardDnd {
 }
 
 // FR-13, laid out as in the design: the card names only the person working on an item, whether
-// they or their agent does the work; a branch claim adds the branch name.
+// they or their agent does the work; a branch claim adds the branch name, and so does a Done item
+// closed by a merged PR (its head branch).
 export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
   item: Item;
   items: ReadonlyMap<string, Item>;
@@ -24,13 +25,14 @@ export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
   dnd?: CardDnd;
 }) {
   const claim = item.claim;
+  const branch = workBranch(item);
   const deps = openDeps(item, items);
   const blocked = !!item.blocked || deps.length > 0;
   const note = latestNote(item);
   const done = item.status === 'done';
   // FR-13: a fix that exists but hasn't reached the default branch yet.
   const pending = done ? undefined : item.citations.find(c => c.kind === 'pending');
-  const hasMeta = !!claim || blocked || !!note || !!pending;
+  const hasMeta = !!claim || !!branch || blocked || !!note || !!pending;
 
   return (
     <div
@@ -61,16 +63,20 @@ export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
         </div>
         {hasMeta && (
           <div className="card-meta">
-            {claim && (
+            {(claim || branch) && (
               <span className="claim">
-                <Avatar user={claim.user} />
-                <span className="name">{person(claim.user).name}</span>
-                {claim.kind === 'branch' && claim.ref && (
+                {claim && (
                   <>
-                    <span className="dot">·</span>
+                    <Avatar user={claim.user} />
+                    <span className="name">{person(claim.user).name}</span>
+                  </>
+                )}
+                {branch && (
+                  <>
+                    {claim && <span className="dot">·</span>}
                     <span className="branch">
                       <BranchIcon />
-                      <span title={claim.ref}>{claim.ref}</span>
+                      <span title={branch}>{branch}</span>
                     </span>
                   </>
                 )}

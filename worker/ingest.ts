@@ -155,7 +155,9 @@ export function ingest(host: IngestHost, f: GhFacts) {
       const merge = f.mergeSha ?? undefined;
       const shas = [...(merge ? [merge] : []), ...f.commits.map(c => c.sha)];
       for (const sha of shas) host.rememberCommit(sha, { pr: f.number, merge: sha === merge });
-      each(it => (it.citations.some(c => c.kind === 'closes' && c.commit && shas.includes(c.commit)) || it.notes.some(n => n.commit && shas.includes(n.commit)) ? { op: 'link_pr', id: it.id, pr: f.number, commits: shas } : null), actor);
+      // A push to main may have closed items before this event arrived; they get the PR and its head branch now.
+      const linkable = (c: Citation) => c.kind === 'closes' && ((!!c.commit && shas.includes(c.commit)) || (c.pr === f.number && !c.head));
+      each(it => (it.citations.some(linkable) || it.notes.some(n => n.commit && shas.includes(n.commit)) ? { op: 'link_pr', id: it.id, pr: f.number, commits: shas, head: f.branch } : null), actor);
 
       const undid = revertedPr(f.body);
       if (undid != null || /^Revert "/.test(f.title)) {
@@ -164,7 +166,8 @@ export function ingest(host: IngestHost, f: GhFacts) {
         return;
       }
 
-      const by = { pr: f.number, branch: f.base, ...(f.author ? { author: f.author } : {}) };
+      // `branch` is where it landed; `head` is the branch the work was done on, which Done cards show.
+      const by = { pr: f.number, branch: f.base, head: f.branch, ...(f.author ? { author: f.author } : {}) };
       for (const it of resolve(r.closes)) close(current(it.id), { ...(merge ? { commit: merge } : {}), ...by, how: 'explicit', message: f.title }, actor);
       // The PR's own commits may say Closes too; a squash merge can drop their messages from main.
       const partial = new Set(resolve(r.refs).map(i => i.id));

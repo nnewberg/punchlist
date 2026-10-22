@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import { workBranch } from '../shared/derive';
 import type { BoardInfo, Item, Op } from '../shared/types';
 import { gh, INSTALL, useProdWorker, webhook } from './harness';
 
@@ -330,5 +331,84 @@ describe('branch claims (FR-26, FR-27, FR-28) — S4', () => {
     const id = await r.add('Tag me');
     await webhook('create', { installation: { id: INSTALL }, repository: { id: nextRepo - 1, name: r.info.repo, owner: { login: 'nnewberg' }, default_branch: 'main' }, sender: { login: 'nick' }, ref: `${id}-release`, ref_type: 'tag' });
     expect((await r.item(id)).claim).toBeNull();
+  });
+});
+
+describe('the branch the work was done on (PL-013)', () => {
+  it("a merged PR's closes carry its head branch, which a Done card shows", async () => {
+    const r = await newRepo();
+    const id = await r.add('Invite copy');
+    await r.push('worktree-quirky-churning-yao', [{ sha: sha(80), message: `Invite copy\n\nCloses: ${id}` }]);
+    gh.prCommits[66] = [{ sha: sha(80), message: `Invite copy\n\nCloses: ${id}`, author: 'nick' }];
+    await r.pr('closed', { number: 66, head: 'worktree-quirky-churning-yao', merged: true, merge_commit_sha: sha(81) });
+    const it = await r.item(id);
+    expect(it.status).toBe('done');
+    expect(it.citations).toMatchObject([{ kind: 'closes', commit: sha(80), pr: 66, branch: 'main', head: 'worktree-quirky-churning-yao' }]);
+    expect(workBranch(it)).toBe('worktree-quirky-churning-yao');
+    // The push of the merge that follows counts once and keeps the head branch.
+    await r.push('main', [{ sha: sha(81), message: 'Merge pull request #66' }, { sha: sha(80), message: `Invite copy\n\nCloses: ${id}` }]);
+    expect((await r.item(id)).citations).toMatchObject([{ head: 'worktree-quirky-churning-yao' }]);
+  });
+
+  it('a push to main that closed it first gets the head branch when the merge arrives', async () => {
+    const r = await newRepo();
+    const id = await r.add('Profile crash');
+    await r.push('main', [{ sha: sha(82), message: `Guard nil profile\n\nCloses: ${id}` }]);
+    let it = await r.item(id);
+    expect(it.status).toBe('done');
+    expect(it.citations[0]!.head).toBeUndefined();
+    expect(workBranch(it)).toBeUndefined();
+    gh.prCommits[65] = [{ sha: sha(82), message: `Guard nil profile\n\nCloses: ${id}`, author: 'nick' }];
+    await r.pr('closed', { number: 65, head: 'worktree-noble-squishing-aurora', merged: true, merge_commit_sha: sha(83) });
+    it = await r.item(id);
+    expect(it.citations).toEqual([expect.objectContaining({ kind: 'closes', commit: sha(82), pr: 65, branch: 'main', head: 'worktree-noble-squishing-aurora' })]);
+    expect(workBranch(it)).toBe('worktree-noble-squishing-aurora');
+    expect((await r.history(id)).map(e => e.meta?.text)).toEqual(['Linked to', 'Closed by push', 'Created']);
+  });
+
+  it('…also when the push already knew the PR', async () => {
+    const r = await newRepo();
+    const id = await r.add('Profile crash');
+    gh.prOf[sha(84)] = 67;
+    await r.push('main', [{ sha: sha(84), message: `Guard nil profile (#67)\n\nCloses: ${id}` }]);
+    expect((await r.item(id)).citations).toMatchObject([{ pr: 67 }]);
+    await r.pr('closed', { number: 67, head: 'worktree-calm-otter', merged: true, merge_commit_sha: sha(84) });
+    expect((await r.item(id)).citations).toMatchObject([{ pr: 67, head: 'worktree-calm-otter' }]);
+    expect((await r.history(id))[0]!.meta).toEqual({ text: 'Recorded the branch', ref: 'worktree-calm-otter' });
+  });
+
+  it("a branch claim's branch is still the one shown", async () => {
+    const r = await newRepo();
+    const id = await r.add('Prod results');
+    const branch = `${id.toLowerCase()}-prod-results`;
+    await r.branch('create', branch);
+    gh.prCommits[68] = [{ sha: sha(85), message: 'Prod results', author: 'nick' }];
+    await r.pr('closed', { number: 68, head: branch, merged: true, merge_commit_sha: sha(86) });
+    const it = await r.item(id);
+    expect(it.status).toBe('done');
+    expect(it.claim).toMatchObject({ kind: 'branch', ref: branch });
+    expect(workBranch(it)).toBe(branch);
+  });
+
+  it('a direct push to main with no PR has no branch to show', async () => {
+    const r = await newRepo();
+    const id = await r.add('Typo');
+    await r.push('main', [{ sha: sha(87), message: `Fix typo\n\nCloses: ${id}` }]);
+    expect(workBranch(await r.item(id))).toBeUndefined();
+  });
+
+  it('the backfill fills in head branches that are missing, once', async () => {
+    const r = await newRepo();
+    const a = await r.add('Closed before heads were recorded');
+    const b = await r.add('Closed by a push');
+    gh.prOf[sha(88)] = 60;
+    await r.push('main', [{ sha: sha(88), message: `Old fix (#60)\n\nCloses: ${a}` }, { sha: sha(89), message: `Direct fix\n\nCloses: ${b}` }]);
+    const stub = env.BOARD.get(env.BOARD.idFromName(`repo:${nextRepo - 1}`));
+    const nick = { user: 'nick', via: 'cli' as const };
+    expect(await stub.recordHeads(r.info, { 60: 'worktree-old-fix', 99: 'unrelated' }, nick)).toEqual({ ok: true, ids: [a] });
+    expect((await r.item(a)).citations).toMatchObject([{ pr: 60, head: 'worktree-old-fix' }]);
+    expect((await r.item(b)).citations[0]!.head).toBeUndefined();
+    expect(await stub.recordHeads(r.info, { 60: 'something-else' }, nick)).toEqual({ ok: true, ids: [] });
+    expect((await r.item(a)).citations[0]!.head).toBe('worktree-old-fix');
   });
 });
