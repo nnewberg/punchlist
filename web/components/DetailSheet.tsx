@@ -4,7 +4,7 @@ import { person } from '../../shared/config';
 import { age, openDeps } from '../../shared/derive';
 import { githubUrl, shortSha } from '../../shared/github';
 import { STATUS_LABEL } from '../../shared/ops';
-import type { BoardEvent, BoardInfo, Item, OpError } from '../../shared/types';
+import { COLUMNS, type BoardEvent, type BoardInfo, type Item, type OpError } from '../../shared/types';
 import { api, boardApi } from '../api';
 import type { BoardClient } from '../boardClient';
 import { Avatar, CloseIcon, Field, Glyph, InlineInput, TrashIcon } from './ui';
@@ -97,7 +97,24 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
 
           <div className="fields">
             <Field label="Status">
-              <span className="pill"><Glyph status={item.status} />{STATUS_LABEL[item.status]}</span>
+              {ro || dropped ? (
+                <span className="pill"><Glyph status={item.status} />{STATUS_LABEL[item.status]}</span>
+              ) : (
+                // Moving here instead of dragging (FR-11 claims on In Progress). Lands at the top of the
+                // column, as reopen and release do, so it's easy to find on the board.
+                <span className="status-pick" role="group" aria-label="Status">
+                  {COLUMNS.map(s => (
+                    <button
+                      key={s}
+                      className="status-opt"
+                      aria-pressed={s === item.status}
+                      onClick={() => s !== item.status && send({ op: 'move', id: item.id, status: s, beforeId: 'top' })}
+                    >
+                      <Glyph status={s} />{STATUS_LABEL[s]}
+                    </button>
+                  ))}
+                </span>
+              )}
             </Field>
             <Field label="Claim">
               {claim ? (
