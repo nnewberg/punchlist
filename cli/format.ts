@@ -133,7 +133,7 @@ export function formatShow(it: Item, items: ReadonlyMap<string, Item>, history: 
   if (it.body.trim()) out.push('', it.body.trim());
   if (it.notes.length) {
     out.push('', c.bold('Notes'));
-    for (const n of it.notes) out.push(`  ${c.dim(`${n.actor} · ${age(n.at)}`)}  ${n.text}${n.commit ? c.dim(` (${[shortSha(n.commit), n.pr ? `PR #${n.pr}` : ''].filter(Boolean).join(', ')})`) : ''}`);
+    for (const n of [...it.notes].reverse()) out.push(`  ${c.dim(`${n.actor} · ${age(n.at)}`)}  ${n.text}${n.commit ? c.dim(` (${[shortSha(n.commit), n.pr ? `PR #${n.pr}` : ''].filter(Boolean).join(', ')})`) : ''}`);
   }
   if (history.length) {
     out.push('', c.bold('History'));

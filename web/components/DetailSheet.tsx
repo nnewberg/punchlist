@@ -184,7 +184,9 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
           <div>
             <div className="section-label">Notes</div>
             <div className="notes">
-              {item.notes.map((n, i) => (
+              {!ro && <NoteInput onSubmit={text => send({ op: 'note', id: item.id, text })} />}
+              {/* Stored oldest-first, shown newest-first under the input; keyed by stored index so a new note doesn't re-key the rest. */}
+              {item.notes.map((n, i) => ({ n, i })).reverse().map(({ n, i }) => (
                 <div key={i} className="note">
                   <span style={{ marginTop: 1 }}><Avatar user={n.actor} /></span>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -201,7 +203,6 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                   </div>
                 </div>
               ))}
-              {!ro && <NoteInput onSubmit={text => send({ op: 'note', id: item.id, text })} />}
               {ro && !item.notes.length && <div style={{ color: 'var(--fg3)', fontSize: 13 }}>No notes</div>}
             </div>
           </div>

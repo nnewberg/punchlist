@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Item, Snapshot, Status } from '../../shared/types';
-import { formatCompact, formatList } from '../format';
+import { formatCompact, formatList, formatShow } from '../format';
 
 const now = new Date().toISOString();
 function item(n: number, status: Status, extra: Partial<Item> = {}): Item {
@@ -60,5 +60,18 @@ describe('list', () => {
     const out = formatList(board(), { status: 'in_progress' });
     expect(out).toContain('In Progress');
     expect(out).not.toContain('Backlog');
+  });
+});
+
+describe('show', () => {
+  it('lists notes newest-first', () => {
+    const it0 = item(1, 'up_next', {
+      notes: [
+        { at: '2026-10-01T00:00:00Z', actor: 'nick', via: 'web', text: 'first note' },
+        { at: '2026-10-02T00:00:00Z', actor: 'aaron', via: 'cli', text: 'second note' },
+      ],
+    });
+    const out = formatShow(it0, new Map([[it0.id, it0]]), []);
+    expect(out.indexOf('second note')).toBeLessThan(out.indexOf('first note'));
   });
 });
