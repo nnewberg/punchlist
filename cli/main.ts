@@ -9,7 +9,7 @@ import type { BoardEvent, Column, ImportFile, Me, MyWorkBoard, Op } from '../sha
 import { ApiError, boardPath, Client, flush, NetworkError, readBoard, write, type ApplyResult, type FlushReport } from './api';
 import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
 import { c, formatCompact, formatImportPlan, formatList, formatMine, formatShow } from './format';
-import { assignOp } from './assign';
+import { assignedElse, assignOp } from './assign';
 import { bodyFromFile, editOp } from './edit';
 import { applyInit, planInit, pluginSettings } from './init';
 import { readHookInput, runHook } from './hooks';
@@ -139,7 +139,8 @@ function reportFlush(r: FlushReport | null) {
 
 // ---- Commands that change the board ----
 
-async function change(label: string, ops: Op[], done: (results: ApplyResult[]) => string) {
+/** `check` names a problem with what the server did, which is reported as a failure (exit 1). */
+async function change(label: string, ops: Op[], done: (results: ApplyResult[]) => string, check?: (results: ApplyResult[]) => string | null) {
   const b = board();
   const api = await client();
   reportFlush(await flush(api, b));
@@ -149,6 +150,8 @@ async function change(label: string, ops: Op[], done: (results: ApplyResult[]) =
     else print(`${c.yellow('Offline, so it’s queued:')} ${label}. It goes out with your next punch command.`);
     return;
   }
+  const problem = check?.(out.results);
+  if (problem) throw new Error(problem);
   if (o.json) printJson(out.results.length === 1 ? out.results[0] : out.results);
   else print(done(out.results));
 }
@@ -341,9 +344,9 @@ async function run() {
       const op = assignOp(id, who, !!o.steal);
       return change(`assign ${id} to ${op.user}`, [op], r => {
         const it = lastItem(r);
-        if (r.every(x => x.ok && 'noop' in x)) return c.dim(`${it.id} is already ${it.claim?.user ?? op.user}'s: nothing changed.`);
-        return `Assigned ${c.bold(it.id)} ${it.title} to ${it.claim?.user ?? op.user} ${c.dim(`(${STATUS_LABEL[it.status]})`)}`;
-      });
+        if (r.every(x => x.ok && 'noop' in x)) return c.dim(`${it.id} is already ${op.user}'s: nothing changed.`);
+        return `Assigned ${c.bold(it.id)} ${it.title} to ${op.user} ${c.dim(`(${STATUS_LABEL[it.status]})`)}`;
+      }, r => assignedElse(lastItem(r), op.user!));
     }
 
     case 'release': {

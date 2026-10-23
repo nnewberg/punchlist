@@ -181,7 +181,8 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
       const kind = assigning ? 'manual' : (op.kind ?? (actor.session ? 'session' : 'manual'));
       const ref = assigning ? undefined : (op.ref ?? actor.session);
       const held = it.claim;
-      if (assigning && held?.user === target) return { ok: true, noop: true, item: cur };
+      // Assigning whoever has it changes nothing, except that a Claude session's claim, which lapses, becomes a lasting one.
+      if (assigning && held?.user === target && held.kind !== 'session') return { ok: true, noop: true, item: cur };
       // A claim you hold yourself can be handed to someone else; a third person's needs `steal` (FR-27).
       if (held && held.user !== target && held.user !== user && !op.steal) {
         return { ok: false, error: { code: 'claimed', message: `${nameOf(held.user)} already has ${it.id}`, holder: held } };
@@ -209,13 +210,14 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
     }
     case 'release': {
       if (!it.claim) return { ok: true, noop: true, item: cur };
+      const holder = it.claim.user;
       it.claim = null;
       if (it.status === 'in_progress') {
         const to = returnColumn(it) === 'in_progress' ? 'up_next' : returnColumn(it);
         it.rank = rankFor(items.values(), to, 'top', it.id);
         setStatus(it, to, now);
       }
-      meta = { text: op.reason?.trim() || 'Released' };
+      meta = { text: op.reason?.trim() || (holder !== user ? `Unassigned ${ctx.editors?.get(holder) || person(holder).name}` : 'Released') };
       break;
     }
     case 'block': {

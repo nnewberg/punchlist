@@ -108,6 +108,23 @@ describe('applyOp', () => {
       expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', since: expect.any(String) });
     });
 
+    it('makes a Claude session’s claim, which lapses, a lasting one for that person', () => {
+      const b = board();
+      b.run({ op: 'create', title: 'x', status: 'up_next' });
+      b.run({ op: 'claim', id: 'PL-001' }, { user: 'aaron', via: 'claude', session: 's1' });
+      expect(text(b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors))).toBe('Assigned to Aaron Smith');
+      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', since: expect.any(String) });
+    });
+
+    it('releasing someone else’s claim reads as unassigning them; your own, as releasing it', () => {
+      const b = board();
+      b.run({ op: 'create', title: 'x', status: 'up_next' });
+      b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors);
+      expect(text(b.run({ op: 'release', id: 'PL-001' }, nick, editors))).toBe('Unassigned Aaron Smith');
+      b.run({ op: 'claim', id: 'PL-001' }, nick);
+      expect(text(b.run({ op: 'release', id: 'PL-001' }, nick))).toBe('Released');
+    });
+
     it('naming yourself is an ordinary claim', () => {
       const b = board();
       b.run({ op: 'create', title: 'x', status: 'up_next' });

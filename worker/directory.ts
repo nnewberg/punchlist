@@ -233,14 +233,14 @@ export async function peopleOn(env: Env, repoIds: number[]): Promise<{ people: R
 
 /**
  * Who can be assigned items on a board, by login, with their names: the people whose last checked role
- * on it is edit. Read by the board's Durable Object, which can't ask GitHub itself (PRD §8), so a role
- * is as fresh as that person's last visit, when FR-2 re-checks it.
+ * on it is edit. Looked up by repo id, which survives renames. Read by the board's Durable Object,
+ * which can't ask GitHub itself (PRD §8), so a role is as fresh as that person's last visit, when FR-2
+ * re-checks it.
  */
-export async function editorsOf(env: Env, owner: string, repo: string): Promise<Map<string, string | null>> {
+export async function editorsOf(env: Env, repoId: number): Promise<Map<string, string | null>> {
   const { results } = await env.DB.prepare(
-    `SELECT u.login, u.name FROM boards b JOIN access a ON a.repo_id = b.repo_id JOIN users u ON u.id = a.user_id
-     WHERE b.owner = ? AND b.repo = ? AND b.archived_at IS NULL AND a.role = 'edit'`,
-  ).bind(owner, repo).all<{ login: string; name: string | null }>();
+    `SELECT u.login, u.name FROM access a JOIN users u ON u.id = a.user_id WHERE a.repo_id = ? AND a.role = 'edit'`,
+  ).bind(repoId).all<{ login: string; name: string | null }>();
   return new Map(results.map(r => [r.login.toLowerCase(), r.name]));
 }
 

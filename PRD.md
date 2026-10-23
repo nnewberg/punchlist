@@ -531,7 +531,7 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - 0.2.0 (2026-10-16) adds `search`, `add --deferred`, `login --start/--finish` and `hook`, and lowers the Node requirement to 20.
 - 0.3.0 (2026-10-16) adds `import`. It also fixes piped output being cut off at 64 KB, which `process.exit()` caused on big-talk's board.
 - 0.3.1 (2026-10-16) adds `edit`, for a title or description. FR-17 had left it out, so Claude could only add notes to an item whose title or body had gone stale. A description edit sends the version it was based on, and a change made in between is refused, as on the web board (FR-8). The plugin runs 0.3.1.
-- 0.3.2 adds `assign ID login`, which gives an item to someone who can edit the board, as the web sheet's Assignee menu does (PL-006). It needs a server with PL-006 deployed: an older one ignores the login and claims the item for you.
+- 0.3.2 adds `assign ID login`, which gives an item to someone who can edit the board, as the web sheet's Assignee menu does (PL-006). It needs a server with PL-006 deployed: an older one ignores the login and claims the item for you, which `punch assign` reports as a failure, with the `punch release` that undoes it.
 
 **UI words**
 - The `dropped` status is shown as **Delete** (trash icon, Undo toast). It's still the soft delete from §6.1, and the CLI command keeps the name `drop`.

@@ -66,28 +66,44 @@ describe('BoardDO', () => {
 });
 
 describe('assigning (PL-006)', () => {
-  // A board with its own name, and who can edit it as the Worker last checked (FR-2).
-  async function boardWith(roles: Record<string, 'edit' | 'view'>) {
-    const repo = `assign-${crypto.randomUUID().slice(0, 8)}`;
+  const ids: Record<string, number> = { nick: 1, aaron: 2, kevin: 3 };
+
+  /** A repo's row in the directory, and who can do what on it as the Worker last checked (FR-2). */
+  async function repoWith(roles: Record<string, 'edit' | 'view'>, repo = `assign-${crypto.randomUUID().slice(0, 8)}`) {
     const repoId = Math.floor(Math.random() * 1e9);
     const t = new Date().toISOString();
-    const ids: Record<string, number> = { nick: 1, aaron: 2, kevin: 3 };
     await env.DB.batch([
       env.DB.prepare(`INSERT INTO boards (repo_id, owner, repo, prefix, installation_id, archived_at, created_at) VALUES (?, 'nnewberg', ?, 'AS', NULL, NULL, ?)`).bind(repoId, repo, t),
       ...Object.entries(ids).map(([login, id]) => env.DB.prepare(`INSERT OR IGNORE INTO users (id, login, name, avatar_url, created_at) VALUES (?, ?, ?, NULL, ?)`).bind(id, login, login === 'aaron' ? 'Aaron Smith' : null, t)),
       ...Object.entries(roles).map(([login, role]) => env.DB.prepare(`INSERT INTO access (user_id, repo_id, role, checked_at) VALUES (?, ?, ?, ?)`).bind(ids[login]!, repoId, role, t)),
     ]);
-    const b = stub();
+    return { repoId, repo };
+  }
+
+  /** Its board, named for the repo id as the Worker names it, with one item. */
+  async function boardWith(roles: Record<string, 'edit' | 'view'>) {
+    const { repoId, repo } = await repoWith(roles);
+    const b = stub(`repo:${repoId}`);
     const at: BoardInfo = { owner: 'nnewberg', repo, prefix: 'AS' };
     await b.apply(at, { op: 'create', title: 'x', status: 'up_next' }, nick);
     return { b, at };
   }
+
+  /** Makes this board's D1 reads fail, as an outage would. */
+  const breakD1 = (b: ReturnType<typeof stub>) =>
+    runInDurableObject(b, instance => {
+      const failing = { prepare: () => { throw new Error('D1 is down'); } } as unknown as D1Database;
+      (instance as unknown as { env: Env }).env = { ...env, DB: failing };
+    });
 
   it('assigns someone who can edit the board, by their name in the history', async () => {
     const { b, at } = await boardWith({ nick: 'edit', aaron: 'edit' });
     const out = await b.apply(at, { op: 'claim', id: 'AS-001', user: 'aaron' }, nick);
     expect(out.ok && out.item.claim).toMatchObject({ user: 'aaron', kind: 'manual' });
     expect((await b.history(at, 'AS-001'))[0]!.meta?.text).toBe('Assigned to Aaron Smith');
+    // Releasing it for them reads as unassigning them.
+    await b.apply(at, { op: 'release', id: 'AS-001' }, nick);
+    expect((await b.history(at, 'AS-001'))[0]!.meta?.text).toBe('Unassigned Aaron Smith');
   });
 
   it('refuses a viewer, or someone with no access', async () => {
@@ -99,10 +115,53 @@ describe('assigning (PL-006)', () => {
     expect((await b.snapshot(at)).items[0]!.claim).toBeNull();
   });
 
+  it('checks the repo the board belongs to, not whichever repo has its old name now', async () => {
+    // The board's repo was renamed, and a new repo took the old name, with other people on it.
+    const renamed = await repoWith({ nick: 'edit', kevin: 'edit' });
+    const taken = await repoWith({ nick: 'edit', aaron: 'edit' });
+    const b = stub(`repo:${renamed.repoId}`);
+    const stale: BoardInfo = { owner: 'nnewberg', repo: taken.repo, prefix: 'AS' };
+    await b.apply(stale, { op: 'create', title: 'x', status: 'up_next' }, nick);
+    expect((await b.apply(stale, { op: 'claim', id: 'AS-001', user: 'aaron' }, nick)).ok).toBe(false);
+    expect((await b.apply(stale, { op: 'claim', id: 'AS-001', user: 'kevin' }, nick)).ok).toBe(true);
+  });
+
   it('applies ops in the order they arrive, even when an assignment waits on the directory', async () => {
     const { b, at } = await boardWith({ nick: 'edit', aaron: 'edit' });
     await Promise.all([b.apply(at, { op: 'claim', id: 'AS-001', user: 'aaron' }, nick), b.apply(at, { op: 'release', id: 'AS-001' }, nick)]);
     expect((await b.snapshot(at)).items[0]!.claim).toBeNull();
+  });
+
+  it('refuses an assignment it can’t check, and answers the tab that sent it', async () => {
+    const { b, at } = await boardWith({ nick: 'edit', aaron: 'edit' });
+    await breakD1(b);
+    const out = await b.apply(at, { op: 'claim', id: 'AS-001', user: 'aaron' }, nick);
+    expect(!out.ok && out.error.message).toBe('Couldn’t check who can be assigned. Try again.');
+
+    const res = await b.fetch(new Request('https://x/ws', { headers: { Upgrade: 'websocket', 'X-Punch-Board': JSON.stringify(at), 'X-Punch-User': 'nick', 'X-Punch-Role': 'edit' } }));
+    const ws = res.webSocket!;
+    ws.accept();
+    const reply = new Promise<{ type: string; clientOpId?: string; error?: { message: string } }>(resolve => {
+      ws.addEventListener('message', e => {
+        const msg = JSON.parse(String(e.data));
+        if (msg.type === 'reject' || msg.type === 'ack' || msg.type === 'event') resolve(msg);
+      });
+    });
+    ws.send(JSON.stringify({ type: 'op', clientOpId: 'c1', op: { op: 'claim', id: 'AS-001', user: 'aaron' } }));
+    expect(await reply).toMatchObject({ type: 'reject', clientOpId: 'c1', error: { message: 'Couldn’t check who can be assigned. Try again.' } });
+    ws.close();
+    // Other changes don't need D1, so they still go through.
+    expect((await b.apply(at, { op: 'note', id: 'AS-001', text: 'still here' }, nick)).ok).toBe(true);
+  });
+
+  it('remembers who can be assigned for a minute, so it doesn’t read D1 for every assignment', async () => {
+    const { b, at } = await boardWith({ nick: 'edit', aaron: 'edit' });
+    await b.apply(at, { op: 'claim', id: 'AS-001', user: 'aaron' }, nick);
+    await b.apply(at, { op: 'release', id: 'AS-001' }, nick);
+    await breakD1(b);
+    expect((await b.apply(at, { op: 'claim', id: 'AS-001', user: 'aaron' }, nick)).ok).toBe(true);
+    // Someone not on the list it has is looked up again, which fails here.
+    expect((await b.apply(at, { op: 'claim', id: 'AS-001', user: 'kevin', steal: true }, nick)).ok).toBe(false);
   });
 });
 

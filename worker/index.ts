@@ -61,7 +61,7 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
     people[user.login] ??= { name: user.name, avatar: user.avatar };
     return json({
       user: user.login,
-      boards: boards.map(b => ({ ...boardInfo(b), role: b.role, editors: editors[b.repoId] ?? [] })),
+      boards: boards.map(b => ({ ...boardInfo(b), role: b.role, editors: b.role === 'edit' ? (editors[b.repoId] ?? []) : [] })),
       people,
       installUrl: installUrl(env),
       dev: env.DEV_MODE === '1',

@@ -181,7 +181,7 @@ export type Role = 'edit' | 'view' | 'none';
 /** A board as listed for one person, with their role on it. */
 export interface BoardEntry extends BoardInfo {
   role: Exclude<Role, 'none'>;
-  /** Logins of the people who can edit it, so can be assigned its items. Only people who have signed in to Punchlist are known. */
+  /** Logins of the people who can edit it, so can be assigned its items (empty for a viewer). Only people who have signed in to Punchlist are known. */
   editors: string[];
 }
 

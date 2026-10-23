@@ -133,11 +133,16 @@ describe('access follows GitHub (FR-2)', () => {
   it('lists who can edit each board, and only they can be assigned (PL-006)', async () => {
     await seedBoards();
     await signedIn('kevin-r', 10);
-    await env.DB.prepare(`INSERT INTO access (user_id, repo_id, role, checked_at) VALUES (10, 502, 'view', ?)`).bind(new Date().toISOString()).run();
+    const t = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO access (user_id, repo_id, role, checked_at) VALUES (10, 502, 'view', ?)`).bind(t),
+      env.DB.prepare(`INSERT INTO access (user_id, repo_id, role, checked_at) VALUES (10, 501, 'edit', ?)`).bind(t),
+    ]);
     const cookie = await signedIn();
-    gh.perms = { 'big-talk:aaron-t': 'write', 'bulletin-bee:aaron-t': 'write' };
+    gh.perms = { 'big-talk:aaron-t': 'read', 'bulletin-bee:aaron-t': 'write' };
     const me = (await (await call('/v1/me', { cookie })).json()) as Me;
     expect(me.boards.find(b => b.repo === 'bulletin-bee')?.editors).toEqual(['aaron-t']);
+    expect(me.boards.find(b => b.repo === 'big-talk')?.editors).toEqual([]); // a viewer can't assign, so isn't told
     expect(me.people['kevin-r']).toBeDefined(); // a viewer is still shown by name
 
     const post = (op: unknown) => call('/v1/boards/nnewberg/bulletin-bee/ops', { method: 'POST', body: JSON.stringify(op), cookie, headers: { origin: ORIGIN } });
