@@ -37,6 +37,19 @@ describe('BoardDO', () => {
     expect(hist.map(e => e.op)).toEqual(['restore', 'move', 'create']);
   });
 
+  it('leaves reorders within a column out of the history, but still syncs them (PL-007)', async () => {
+    const b = stub();
+    await b.apply(info, { op: 'create', title: 'a', status: 'up_next' }, nick);
+    await b.apply(info, { op: 'create', title: 'b', status: 'up_next' }, nick);
+    const { seq } = await b.snapshot(info);
+    await b.apply(info, { op: 'move', id: 'PL-002', status: 'up_next', beforeId: 'PL-001' }, nick);
+    await b.apply(info, { op: 'move', id: 'PL-002', status: 'done' }, nick);
+    const hist = await b.history(info, 'PL-002');
+    expect(hist.map(e => e.meta?.text)).toEqual(['Closed', 'Created']);
+    const since = await b.eventsSince(info, seq);
+    expect(since?.events.map(e => e.event.meta?.text)).toEqual(['Reordered', 'Closed']);
+  });
+
   it('persists across a restart of the object', async () => {
     const name = crypto.randomUUID();
     await stub(name).apply(info, { op: 'create', title: 'durable' }, nick);
@@ -138,6 +151,13 @@ describe('import (PRD §7.9)', () => {
     expect((await b.history(bt, 'BT-001'))[0]!.meta?.text).toBe('Imported: merged in 44f9d9c');
     const next = await b.apply(bt, { op: 'create', title: 'after the import' }, nick);
     expect(next.ok && 'event' in next && next.item.id).toBe('BT-038');
+  });
+
+  it('a reorder that claims an unclaimed in-progress item stays in its history', async () => {
+    const b = stub();
+    await b.importItems(bt, items, nick);
+    await b.apply(bt, { op: 'move', id: 'BT-035', status: 'in_progress', beforeId: 'top' }, nick);
+    expect((await b.history(bt, 'BT-035'))[0]!.op).toBe('move');
   });
 
   it('an alias finds its item', async () => {

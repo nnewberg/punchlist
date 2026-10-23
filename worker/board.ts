@@ -150,9 +150,21 @@ export class BoardDO extends DurableObject<Env> {
     return { board: this.info!, items: [...this.items.values()], seq: this.seq, viewers: this.viewers() };
   }
 
+  /**
+   * An item's activity, newest first. Moves within a column are left out (PL-007): they only change
+   * rank and would swamp the list. They stay in the event log, which is how clients sync. A reorder
+   * that also claimed an unclaimed in-progress item (FR-11) still shows.
+   */
   history(info: BoardInfo, id: string): BoardEvent[] {
     this.ensure(info);
-    return this.sql.exec<EventRow>(`SELECT * FROM events WHERE item_id = ? ORDER BY seq DESC LIMIT 200`, id).toArray().map(r => this.rowToEvent(r));
+    return this.sql.exec<EventRow>(
+      `SELECT * FROM events WHERE item_id = ?
+         AND NOT (op = 'move'
+           AND json_extract(before, '$.status') IS json_extract(after, '$.status')
+           AND json_extract(before, '$.claim') IS json_extract(after, '$.claim'))
+       ORDER BY seq DESC LIMIT 200`,
+      id,
+    ).toArray().map(r => this.rowToEvent(r));
   }
 
   eventsSince(info: BoardInfo, since: number): { events: { event: BoardEvent; item: Item }[]; seq: number } | null {
