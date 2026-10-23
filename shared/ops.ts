@@ -295,11 +295,13 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
       it.citations = it.citations.map(x => {
         if (x.kind !== 'closes' || !((x.commit && shas.has(x.commit)) || x.pr === op.pr)) return x;
         const y = { ...x };
+        // A different PR brings its own head branch; the same PR only fills in a missing one.
         if (y.pr !== op.pr) {
           y.pr = op.pr;
+          if (op.head) y.head = op.head;
+          else delete y.head;
           linked = true;
-        }
-        if (op.head && !y.head) {
+        } else if (op.head && !y.head) {
           y.head = op.head;
           headed = true;
         }

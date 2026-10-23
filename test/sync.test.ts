@@ -377,6 +377,21 @@ describe('the branch the work was done on (PL-013)', () => {
     expect((await r.history(id))[0]!.meta).toEqual({ text: 'Recorded the branch', ref: 'worktree-calm-otter' });
   });
 
+  it('…also for a rebase merge, whose commits on main have new SHAs', async () => {
+    const r = await newRepo();
+    const id = await r.add('Profile crash');
+    // The rebased commits land on main; the closing one isn't the PR's merge commit (that's the last one).
+    gh.prOf[sha(90)] = 69;
+    gh.prOf[sha(91)] = 69;
+    await r.push('main', [{ sha: sha(90), message: `Guard nil profile\n\nCloses: ${id}` }, { sha: sha(91), message: 'Tidy up' }]);
+    expect((await r.item(id)).citations).toMatchObject([{ commit: sha(90), pr: 69 }]);
+    gh.prCommits[69] = [{ sha: sha(92), message: `Guard nil profile\n\nCloses: ${id}`, author: 'nick' }, { sha: sha(93), message: 'Tidy up', author: 'nick' }];
+    await r.pr('closed', { number: 69, head: 'worktree-brisk-heron', merged: true, merge_commit_sha: sha(91) });
+    const it = await r.item(id);
+    expect(it.citations).toMatchObject([{ commit: sha(90), pr: 69, head: 'worktree-brisk-heron' }]);
+    expect(workBranch(it)).toBe('worktree-brisk-heron');
+  });
+
   it("a branch claim's branch is still the one shown", async () => {
     const r = await newRepo();
     const id = await r.add('Prod results');

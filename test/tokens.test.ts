@@ -142,6 +142,14 @@ describe('ops from the CLI', () => {
     expect((await heads('futureleisurefoundation/big-talk', { heads: { main: 'x' } })).status).toBe(400);
     expect((await heads('futureleisurefoundation/big-talk', { heads: { 12: 42 } })).status).toBe(400);
     expect((await heads('futureleisurefoundation/big-talk', {})).status).toBe(400);
+    // Not a plain object of PR → branch: a string or array would otherwise pass as {"0": …}.
+    expect((await heads('futureleisurefoundation/big-talk', { heads: 'abc' })).status).toBe(400);
+    expect((await heads('futureleisurefoundation/big-talk', { heads: ['x'] })).status).toBe(400);
+    // Not a branch name.
+    for (const ref of ['', 'two words', 'tab\there', 'line\nbreak', 'bell\u0007', 'a:b']) {
+      expect((await heads('futureleisurefoundation/big-talk', { heads: { 12: ref } })).status).toBe(400);
+    }
+    expect((await heads('futureleisurefoundation/big-talk', { heads: { 12: 'feature/pl-013_done.branch-2' } })).status).toBe(200);
     expect((await heads('nnewberg/bulletin-bee', { heads: { 12: 'x' } })).status).toBe(403);
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { workBranch } from '../shared/derive';
 import { applyOp, columnItems, inversePatch } from '../shared/ops';
 import type { Actor, Item, Op } from '../shared/types';
 
@@ -104,6 +105,39 @@ describe('applyOp', () => {
     const it = b.items.get('PL-001')!;
     expect(it.status).toBe('backlog');
     expect(it.closed_at).toBeUndefined();
+  });
+
+  it("shows only the current close's branch on a Done card (PL-013)", () => {
+    const b = board();
+    const github: Actor = { user: 'nick', via: 'github' };
+    const close = (c: { commit: string; pr?: number; head?: string }) =>
+      b.run({ op: 'cite', id: 'PL-001', citation: { kind: 'closes', branch: 'main', how: 'explicit', confidence: null, ...c } }, github);
+    b.run({ op: 'create', title: 'x', status: 'up_next' });
+    close({ commit: 'a'.repeat(40), pr: 93, head: 'branch-try-1' });
+    expect(workBranch(b.items.get('PL-001')!)).toBe('branch-try-1');
+    // Reopened, then closed again by a direct push to main: no branch, not the earlier PR's.
+    b.run({ op: 'reopen', id: 'PL-001' });
+    close({ commit: 'b'.repeat(40) });
+    expect(b.items.get('PL-001')!.status).toBe('done');
+    expect(workBranch(b.items.get('PL-001')!)).toBeUndefined();
+    // A push that also fixes it after a PR closed it keeps the PR's branch.
+    b.run({ op: 'reopen', id: 'PL-001' });
+    close({ commit: 'c'.repeat(40), pr: 94, head: 'branch-try-2' });
+    close({ commit: 'd'.repeat(40) });
+    expect(workBranch(b.items.get('PL-001')!)).toBe('branch-try-2');
+  });
+
+  it("relinking a close to a different PR takes that PR's head branch (PL-013)", () => {
+    const b = board();
+    const github: Actor = { user: 'nick', via: 'github' };
+    const commit = 'e'.repeat(40);
+    b.run({ op: 'create', title: 'x', status: 'up_next' });
+    b.run({ op: 'cite', id: 'PL-001', citation: { kind: 'closes', commit, pr: 91, branch: 'main', head: 'branch-a', how: 'explicit', confidence: null } }, github);
+    // Stacked PRs, squash-merged: #92's merge carries the same commit.
+    b.run({ op: 'link_pr', id: 'PL-001', pr: 92, commits: [commit], head: 'branch-b' }, github);
+    expect(b.items.get('PL-001')!.citations).toMatchObject([{ pr: 92, head: 'branch-b' }]);
+    // The same PR again only fills in a missing head.
+    expect(b.run({ op: 'link_pr', id: 'PL-001', pr: 92, commits: [commit], head: 'branch-c' }, github)).toMatchObject({ ok: true, noop: true });
   });
 
   it('builds an inverse patch that restores the earlier item', () => {
