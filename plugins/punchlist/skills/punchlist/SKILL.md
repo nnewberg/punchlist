@@ -66,6 +66,8 @@ punch start ID
 
 The claim lasts while this session is in use. It's released when the session ends, and lapses after 2 hours with no activity. If you stop working on an item before then without finishing it, run `punch release ID`.
 
+To hand an item to someone else, when the user asks, run `punch assign ID login` (their GitHub login). It becomes their claim and moves to In Progress. Only people who can edit the board can be assigned. If someone else holds it, it fails; reassign only if the user says so, with `--steal`. `punch release ID` unassigns.
+
 ## Notes
 
 Add a note on your own when you learn something a teammate picking up the item would want:
@@ -112,6 +114,7 @@ Do these only when the user asks:
 - delete: `punch drop ID`
 - edit or close someone else's item
 - take over someone else's claim (`--steal`)
+- assign or unassign an item (`punch assign`, or `punch release` on someone else's)
 
 Blocking is a status report, so you may `punch block ID "<reason, naming who or what>"` when you're truly stuck on something outside your control. Say so.
 
