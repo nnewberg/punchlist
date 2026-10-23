@@ -66,6 +66,8 @@ export class BoardDO extends DurableObject<Env> {
   private info: BoardInfo | null = null;
   private seq = 0;
   private nextNum = 1;
+  /** The repo this board is for, from its name (`repo:<id>`), which outlasts renames. */
+  private repoId: number | null = null;
   /** Last heartbeat per Claude session, in ms. Kept in memory; written to `sessions` coarsely. */
   private seen = new Map<string, { at: number; stored: number }>();
   /** When the alarm is set for, as far as this instance knows. */
@@ -102,6 +104,10 @@ export class BoardDO extends DurableObject<Env> {
     if (meta.has('info')) this.info = JSON.parse(meta.get('info')!);
     this.seq = Number(meta.get('seq') ?? 0);
     this.nextNum = Number(meta.get('next_num') ?? 1);
+    // `ctx.id.name` isn't promised when a hibernated socket wakes the object, so keep the id once seen.
+    const named = /^repo:(\d+)$/.exec(this.ctx.id.name ?? '')?.[1];
+    if (named && meta.get('repo_id') !== named) this.setMeta('repo_id', named);
+    this.repoId = Number(named ?? meta.get('repo_id')) || null;
     for (const r of this.sql.exec<{ json: string }>(`SELECT json FROM items`)) {
       const it = JSON.parse(r.json) as Item;
       this.items.set(it.id, it);
@@ -294,8 +300,8 @@ export class BoardDO extends DurableObject<Env> {
   private async editorsFor(login: string): Promise<ReadonlyMap<string, string | null>> {
     const c = this.editors;
     if (c && Date.now() - c.at < EDITORS_FRESH_MS && c.map.has(login)) return c.map;
-    // Named for its repo's id (`repo:<id>`), which outlasts renames; the name a board shows can belong to another repo later.
-    const repoId = Number(/^repo:(\d+)$/.exec(this.ctx.id.name ?? '')?.[1]);
+    // By repo id, not the name the board shows, which can belong to another repo after a rename.
+    const repoId = this.repoId;
     if (!repoId) throw new Error(`board ${this.ctx.id.name ?? this.ctx.id.toString()} isn't named for a repo id`);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error('D1 took too long')), EDITORS_TIMEOUT_MS)));
