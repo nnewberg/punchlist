@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import { person } from '../../shared/config';
 import { age, openDeps } from '../../shared/derive';
@@ -237,18 +237,26 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
 // Moving here instead of dragging (FR-11 claims on In Progress). Lands at the top of the column, as
 // reopen and release do, so it's easy to find on the board.
 function StatusPicker({ item, onMove }: { item: Item; onMove: (status: Column) => void }) {
-  const [open, setOpen] = useState(false);
-  const close = useCallback(() => setOpen(false), []);
-  const ref = useDismiss<HTMLSpanElement>(open, close);
+  const [open, setOpen] = useState<null | 'down' | 'up'>(null);
+  const close = useCallback(() => setOpen(null), []);
+  const ref = useDismiss<HTMLSpanElement>(!!open, close);
+  const pill = useRef<HTMLButtonElement>(null);
+  // The sheet body scrolls, so open upward when the menu wouldn't fit below the pill.
+  const toggle = () => {
+    if (open) return close();
+    const r = pill.current!.getBoundingClientRect();
+    const body = pill.current!.closest('.sheet-body')!.getBoundingClientRect();
+    setOpen(body.bottom - r.bottom < 130 && r.top - body.top > body.bottom - r.bottom ? 'up' : 'down');
+  };
   return (
     <span ref={ref} style={{ position: 'relative' }}>
-      <button className="pill status-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+      <button ref={pill} className="pill status-btn" aria-expanded={!!open} onClick={toggle}>
         <Glyph status={item.status} />{STATUS_LABEL[item.status]}<ChevronIcon />
       </button>
       {open && (
-        <div className="menu" role="menu" style={{ top: 28, left: 0, minWidth: 160 }}>
+        <div className="menu" style={{ ...(open === 'up' ? { bottom: 28 } : { top: 28 }), left: 0, minWidth: 160 }}>
           {COLUMNS.filter(s => s !== item.status).map(s => (
-            <button key={s} className="menu-item" role="menuitem" onClick={() => (close(), onMove(s))}>
+            <button key={s} className="menu-item" onClick={() => (close(), pill.current?.focus(), onMove(s))}>
               <Glyph status={s} />{STATUS_LABEL[s]}
             </button>
           ))}
