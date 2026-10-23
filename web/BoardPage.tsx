@@ -152,7 +152,8 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardEntry[] }) 
   const openItem = openId ? items.get(openId) : undefined;
 
   return (
-    <div className="app">
+    // A search, filter or older Done items in view keep a visible tab from reloading for a new build (PL-014).
+    <div className="app" data-view-set={searching || showOlder || undefined}>
       <Header
         board={board}
         boards={boards}

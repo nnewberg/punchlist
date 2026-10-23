@@ -1,25 +1,38 @@
-import { BUILD_ID, DEV_BUILD, reloadDecision } from '../shared/build';
+import { BUILD_ID, DEV_BUILD, nextReload, pageEngaged, pageUnsaved, reloadDecision, type LastReload, type Page } from '../shared/build';
 
 // PL-014: a tab that's behind the deployed build reloads itself, at a moment that loses nothing, so
 // nobody has to reload to get the latest. A deploy restarts every board, so each open board tab
-// reconnects within seconds and hears the new build in the reply to its sync. Pages without a board
-// socket (My work) ask /v1/build when they come back into view.
+// reconnects within seconds and hears the new build in the reply to its sync. While no board socket
+// is live (My work, or a board that's offline), the tab asks /v1/build: at startup, every few
+// minutes while it's in view, and when it comes back into view, gets focus or gets back online.
 
-const RELOADED_FOR = 'pl_reloaded_for';
+const LAST_RELOAD = 'pl_last_reload';
 /** How often a tab that's behind looks again for a safe moment. */
 const RECHECK_MS = 2_000;
-/** At most this often, a tab coming into view asks which build is deployed. */
+/** How often a tab in view with no live board socket asks which build is deployed. */
+const POLL_MS = 5 * 60_000;
+/** Asking on focus and the like happens at most this often. */
 const ASK_MS = 60_000;
+
+interface Board {
+  /** Ops the server hasn't answered yet. */
+  busy(): boolean;
+  /** Its socket is open, so it hears the deployed build on its own. */
+  live(): boolean;
+}
 
 let deployed: string | null = null;
 let asked = 0;
+let lastInput = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
-const holds = new Set<() => boolean>();
+/** Where the last reload is kept if sessionStorage can't be used: at most one reload per page load, then. */
+let memory: LastReload | null = null;
+const boards = new Set<Board>();
 
-/** Holds off reloading while `busy()` is true, e.g. while a board has ops the server hasn't answered. Returns the release. */
-export function holdReload(busy: () => boolean): () => void {
-  holds.add(busy);
-  return () => holds.delete(busy);
+/** A board client, which holds off a reload while it has ops in flight. Returns the release. */
+export function watchBoard(b: Board): () => void {
+  boards.add(b);
+  return () => boards.delete(b);
 }
 
 /** What the server says is deployed. */
@@ -29,38 +42,53 @@ export function deployedBuild(build: string | undefined) {
   check();
 }
 
-/** Typed text (a note, a title or a new item, a tag), the description editor open, a card in hand, or a hold. */
-function unsaved(): boolean {
-  const fields = document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('textarea, input:not([type]):not([data-not-draft]), input[type=text]:not([data-not-draft])');
-  return [...fields].some(f => f.value.trim() !== '') || !!document.querySelector('.body-edit, .dragging') || [...holds].some(busy => busy());
+const page: Page = {
+  has: sel => !!document.querySelector(sel),
+  values: sel => [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(sel)].map(f => f.value),
+  focusIn: sel => !!document.activeElement?.closest(sel),
+};
+
+function readLast(): LastReload | null {
+  try {
+    return JSON.parse(sessionStorage.getItem(LAST_RELOAD) ?? 'null') as LastReload | null;
+  } catch {
+    return memory;
+  }
 }
 
-/** Typing in a field (even an empty one) or picking from a menu. */
-function engaged(): boolean {
-  return !!document.activeElement?.closest('input, textarea, [contenteditable]') || !!document.querySelector('.menu');
+function writeLast(last: LastReload | null) {
+  memory = last;
+  try {
+    if (last) sessionStorage.setItem(LAST_RELOAD, JSON.stringify(last));
+    else sessionStorage.removeItem(LAST_RELOAD);
+  } catch {
+    // kept in memory instead
+  }
 }
 
 function check() {
   clearTimeout(timer);
-  let reloadedFor: string | null;
-  try {
-    reloadedFor = sessionStorage.getItem(RELOADED_FOR);
-  } catch {
-    return; // nowhere to remember it, so no way to stop a loop
-  }
-  const hidden = document.visibilityState === 'hidden';
-  const d = reloadDecision({ mine: BUILD_ID, deployed, reloadedFor, hidden, unsaved: unsaved(), engaged: engaged() });
+  const last = readLast();
+  const now = Date.now();
+  const d = reloadDecision({
+    mine: BUILD_ID,
+    deployed,
+    last,
+    now,
+    hidden: document.visibilityState === 'hidden',
+    unsaved: pageUnsaved(page) || [...boards].some(b => b.busy()),
+    engaged: pageEngaged(page),
+    quietFor: now - lastInput,
+  });
+  if (d === 'current' && last && deployed === BUILD_ID) writeLast(null); // up to date: start counting afresh
   if (d === 'wait') timer = setTimeout(check, RECHECK_MS);
   if (d !== 'reload') return;
-  try {
-    sessionStorage.setItem(RELOADED_FOR, deployed!);
-  } catch {
-    return;
-  }
+  writeLast(nextReload(last, deployed!, now));
   location.reload(); // same URL, so the board and any open item come back
 }
 
-function ask() {
+function ask(force = false) {
+  if ([...boards].some(b => b.live()) || (!force && Date.now() - asked < ASK_MS)) return;
   asked = Date.now();
   fetch('/v1/build', { cache: 'no-store' })
     .then(r => r.json() as Promise<{ build?: string }>)
@@ -70,9 +98,15 @@ function ask() {
 /** Called once at startup. A dev build never reloads, so it doesn't ask. */
 export function startAutoReload() {
   if (BUILD_ID === DEV_BUILD) return;
-  asked = Date.now();
+  for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel']) {
+    window.addEventListener(type, () => (lastInput = Date.now()), { capture: true, passive: true });
+  }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && Date.now() - asked > ASK_MS) ask();
+    if (document.visibilityState === 'visible') ask();
     check();
   });
+  window.addEventListener('focus', () => ask());
+  window.addEventListener('online', () => ask());
+  setInterval(() => document.visibilityState === 'visible' && ask(true), POLL_MS);
+  ask(true);
 }

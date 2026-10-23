@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { applyOp } from '../shared/ops';
 import type { BoardEvent, BoardInfo, Item, Op, OpError, ServerMsg, Snapshot } from '../shared/types';
 import { account, api, boardApi, wsUrl } from './api';
-import { deployedBuild, holdReload } from './autoReload';
+import { deployedBuild, watchBoard } from './autoReload';
 
 // Live board state for one tab. The server decides (FR-7): `confirmed` holds what the board Durable
 // Object has acknowledged, and pending local ops are re-applied on top of it with the same pure
@@ -65,8 +65,8 @@ export class BoardClient {
   }
 
   async start() {
-    // A reload for a new build waits until the board has answered every op (PL-014).
-    this.releaseHold = holdReload(() => this.pending.length > 0);
+    // A reload for a new build waits until the board has answered every op, and a live socket reports the build itself (PL-014).
+    this.releaseHold = watchBoard({ busy: () => this.pending.length > 0, live: () => this.ws?.readyState === WebSocket.OPEN });
     try {
       const snap = await api<Snapshot>(boardApi(this.board));
       if (this.stopped) return;
