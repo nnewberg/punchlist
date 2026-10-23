@@ -530,8 +530,8 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - Publishing needs Nick's security-key 2FA, so `npm publish` runs in his own terminal, not from an agent.
 - 0.2.0 (2026-10-16) adds `search`, `add --deferred`, `login --start/--finish` and `hook`, and lowers the Node requirement to 20.
 - 0.3.0 (2026-10-16) adds `import`. It also fixes piped output being cut off at 64 KB, which `process.exit()` caused on big-talk's board.
-- 0.3.1 (2026-10-16) adds `edit`, for a title or description. FR-17 had left it out, so Claude could only add notes to an item whose title or body had gone stale. A description edit sends the version it was based on, and a change made in between is refused, as on the web board (FR-8). The plugin runs 0.3.1.
-- 0.3.2 adds `assign ID login`, which gives an item to someone who can edit the board, as the web sheet's Assignee menu does (PL-006). It needs a server with PL-006 deployed: an older one ignores the login and claims the item for you, which `punch assign` reports as a failure, with the `punch release` that undoes it.
+- 0.3.1 (2026-10-16) adds `edit`, for a title or description. FR-17 had left it out, so Claude could only add notes to an item whose title or body had gone stale. A description edit sends the version it was based on, and a change made in between is refused, as on the web board (FR-8).
+- 0.3.2 (2026-10-22) adds `assign ID login`, which gives an item to someone who can edit the board, as the web sheet's Assignee menu does (PL-006). It needs a server with PL-006 deployed: an older one ignores the login and claims the item for you, which `punch assign` reports as a failure, with the `punch release` that undoes it. It also lists notes newest-first in `show` (PL-012). The plugin runs 0.3.2.
 
 **UI words**
 - The `dropped` status is shown as **Delete** (trash icon, Undo toast). It's still the soft delete from §6.1, and the CLI command keeps the name `drop`.
@@ -559,7 +559,7 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - **Where it lives.** `plugins/punchlist`, with this repo as its marketplace (`.claude-plugin/marketplace.json`; install id `punchlist@punchlist`).
   - Teammates can't fetch a plugin from a private repo, so `nnewberg/punchlist` was made public on 2026-10-16 (decided with Nick, after a history scan found no secrets). Boards stay private either way.
   - Checked from a clean Claude config: the marketplace adds and the plugin installs from GitHub, and its first session start installs `punch` from npm and shows the board.
-  - The plugin carries a `version` (0.3.1 as of this writing), bumped whenever the plugin folder changes. An earlier version had none, so every commit to this repo counted as a plugin update for everyone, even commits that only touched the Worker. The onboarding test found this.
+  - The plugin carries a `version` (0.3.2 as of this writing), bumped whenever the plugin folder changes. An earlier version had none, so every commit to this repo counted as a plugin update for everyone, even commits that only touched the Worker. The onboarding test found this.
 - **The CLI inside it.** `bin/punch` installs the `punch` version named in `cli-version` into the plugin's data folder on first use, then runs it. The first run takes about 1 s, later runs about 30 ms.
   - The install uses `--prefer-online`, because npm's cached package list doesn't know about a version published minutes earlier.
   - If the install fails, session start tells Claude the board isn't loaded, rather than staying silent.

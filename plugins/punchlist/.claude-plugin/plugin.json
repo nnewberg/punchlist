@@ -1,6 +1,6 @@
 {
   "name": "punchlist",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Claude keeps your repo's shared Punchlist board current: adds items, claims what it works on, files what it defers, and starts each session knowing the board.",
   "author": { "name": "Nick Newberg" },
   "homepage": "https://punchlist.nnewberg.workers.dev",
