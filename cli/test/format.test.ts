@@ -72,6 +72,7 @@ describe('show', () => {
       ],
     });
     const out = formatShow(it0, new Map([[it0.id, it0]]), []);
+    expect(out).toContain('second note');
     expect(out.indexOf('second note')).toBeLessThan(out.indexOf('first note'));
   });
 });
