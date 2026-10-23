@@ -130,7 +130,7 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
             </Field>
             <Field label="Blocked">
               {item.blocked && (
-                <span className="badge-warn"><span>⊘</span>{item.blocked.reason}</span>
+                <span className="badge-warn"><span>⊘</span>{item.blocked.reason}{!ro && <button aria-label="Remove block" onClick={() => send({ op: 'unblock', id: item.id })}>×</button>}</span>
               )}
               {deps.map(d => (
                 <span key={d.id} className="dep">
@@ -139,11 +139,9 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                   <span className="t">{d.title}</span>
                 </span>
               ))}
-              {ro ? (!item.blocked && !deps.length && <span style={{ color: 'var(--fg3)' }}>No</span>) : item.blocked
-                ? <button className="btn-sm" onClick={() => send({ op: 'unblock', id: item.id })}>Unblock</button>
-                : adding === 'block'
-                  ? <InlineInput placeholder="Reason" onSubmit={v => (send({ op: 'block', id: item.id, reason: v }), setAdding(null))} onCancel={() => setAdding(null)} />
-                  : <>{!deps.length && <span style={{ color: 'var(--fg3)' }}>No</span>}<button className="btn-dashed" onClick={() => setAdding('block')}>+ reason</button></>}
+              {!item.blocked && (ro ? (!deps.length && <span style={{ color: 'var(--fg3)' }}>No</span>) : adding === 'block'
+                ? <InlineInput placeholder="Reason" onSubmit={v => (send({ op: 'block', id: item.id, reason: v }), setAdding(null))} onCancel={() => setAdding(null)} />
+                : <>{!deps.length && <span style={{ color: 'var(--fg3)' }}>No</span>}<button className="btn-dashed" onClick={() => setAdding('block')}>+ reason</button></>)}
             </Field>
             <Field label="Depends on">
               {item.depends_on.map(id => {
