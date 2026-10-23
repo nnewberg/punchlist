@@ -57,11 +57,11 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
     const sync = reconcileSoon(env);
     if (sync) ctx.waitUntil(sync);
     const boards = await boardsFor(env, user);
-    const people = await peopleOn(env, boards.map(b => b.repoId));
+    const { people, editors } = await peopleOn(env, boards.map(b => b.repoId));
     people[user.login] ??= { name: user.name, avatar: user.avatar };
     return json({
       user: user.login,
-      boards: boards.map(b => ({ ...boardInfo(b), role: b.role })),
+      boards: boards.map(b => ({ ...boardInfo(b), role: b.role, editors: editors[b.repoId] ?? [] })),
       people,
       installUrl: installUrl(env),
       dev: env.DEV_MODE === '1',

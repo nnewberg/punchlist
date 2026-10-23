@@ -9,6 +9,7 @@ import type { BoardEvent, Column, ImportFile, Me, MyWorkBoard, Op } from '../sha
 import { ApiError, boardPath, Client, flush, NetworkError, readBoard, write, type ApplyResult, type FlushReport } from './api';
 import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
 import { c, formatCompact, formatImportPlan, formatList, formatMine, formatShow } from './format';
+import { assignOp } from './assign';
 import { bodyFromFile, editOp } from './edit';
 import { applyInit, planInit, pluginSettings } from './init';
 import { readHookInput, runHook } from './hooks';
@@ -30,7 +31,8 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
   search "words"                the closest items, Done ones from the last 30 days too
   move ID status [--top | --before ID]             move it (backlog, next, progress, done)
   start ID [--steal]            claim it and move it to In Progress
-  release ID                    give it back
+  release ID                    give it back (also how to unassign it)
+  assign ID login [--steal]     give it to someone who can edit the board; it moves to In Progress
   block ID reason / unblock ID
   close ID [-m note]            mark it Done
   reopen ID
@@ -330,6 +332,18 @@ async function run() {
     case 'claim': {
       const id = need(args[0], 'an item ID');
       return change(`start ${id}`, [{ op: 'claim', id, ...(o.steal ? { steal: true } : {}) }], said('Started'));
+    }
+
+    case 'assign': {
+      const id = need(args[0], 'an item ID');
+      const who = need(args[1], 'who to assign it to (their GitHub login)');
+      if (args.length > 2) throw new UsageError('Name one person by their GitHub login, for example: punch assign BT-014 aaron-t');
+      const op = assignOp(id, who, !!o.steal);
+      return change(`assign ${id} to ${op.user}`, [op], r => {
+        const it = lastItem(r);
+        if (r.every(x => x.ok && 'noop' in x)) return c.dim(`${it.id} is already ${it.claim?.user ?? op.user}'s: nothing changed.`);
+        return `Assigned ${c.bold(it.id)} ${it.title} to ${it.claim?.user ?? op.user} ${c.dim(`(${STATUS_LABEL[it.status]})`)}`;
+      });
     }
 
     case 'release': {

@@ -18,6 +18,7 @@ punch list --compact   # the board for this repo, found from `origin`
 | `search "words"` | the closest items, including Done in the last 30 days (the duplicate check) |
 | `move ID status [--top \| --before ID]` | move it |
 | `start ID [--steal]` / `release ID` | claim it, or give it back |
+| `assign ID login [--steal]` | give it to someone who can edit the board (`@login`, any case), as the web board's Assignee menu does; it moves to In Progress. `--steal` if someone else has it. To unassign it, `release ID` |
 | `block ID reason` / `unblock ID` | |
 | `close ID [-m note]` / `reopen ID` | |
 | `note ID text` | add a note |

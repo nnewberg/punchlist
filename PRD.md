@@ -270,7 +270,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 ### 7.4 CLI (`punch`, npm package `@nnewberg/punchlist`)
 - **FR-17 Commands:**
   - `punch login` and `punch init` (links the repo to its board and adds the CLAUDE.md pointer, FR-23)
-  - `add`, `edit`, `list`, `show`, `move`, `start`, `release`, `block`, `unblock`, `close`, `reopen`, `drop`, `note`
+  - `add`, `edit`, `list`, `show`, `move`, `start`, `assign`, `release`, `block`, `unblock`, `close`, `reopen`, `drop`, `note`
   - `open` (opens the web board) and `mine`
   - `import`, `export`
 - **FR-18 Compact output.** `punch list --compact` prints the board in no more than about 1,500 tokens. It is used for Claude's context and the terminal.
@@ -318,6 +318,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
   - `/punch start` or `punch start`
   - dragging the card to In Progress
   - pushing a branch whose name contains an ID (`bb-031-…`); the claim goes to the person who pushed
+  - assigning it to someone who can edit the board, in the sheet's Assignee menu or with `punch assign`; it's a manual claim made on their behalf
 - **FR-27 One holder per item.** A claim on an item that is already held fails and names the current holder. The holder can be overridden with `--steal`, which is recorded in the log.
 - **FR-28 Claim lifetime:**
   - Session claims expire after a TTL with no heartbeat (default 2 hours).
@@ -530,6 +531,7 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - 0.2.0 (2026-10-16) adds `search`, `add --deferred`, `login --start/--finish` and `hook`, and lowers the Node requirement to 20.
 - 0.3.0 (2026-10-16) adds `import`. It also fixes piped output being cut off at 64 KB, which `process.exit()` caused on big-talk's board.
 - 0.3.1 (2026-10-16) adds `edit`, for a title or description. FR-17 had left it out, so Claude could only add notes to an item whose title or body had gone stale. A description edit sends the version it was based on, and a change made in between is refused, as on the web board (FR-8). The plugin runs 0.3.1.
+- 0.3.2 adds `assign ID login`, which gives an item to someone who can edit the board, as the web sheet's Assignee menu does (PL-006). It needs a server with PL-006 deployed: an older one ignores the login and claims the item for you.
 
 **UI words**
 - The `dropped` status is shown as **Delete** (trash icon, Undo toast). It's still the soft delete from §6.1, and the CLI command keeps the name `drop`.

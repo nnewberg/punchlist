@@ -75,4 +75,10 @@ describe('show', () => {
     expect(out).toContain('second note');
     expect(out.indexOf('second note')).toBeLessThan(out.indexOf('first note'));
   });
+
+  it('says who it is assigned to, or that nobody is', () => {
+    const held = item(1, 'in_progress', { claim: { user: 'aaron', kind: 'manual', since: now } });
+    expect(formatShow(held, new Map(), []).split('\n')[1]).toBe('In Progress · assigned to aaron · #ux');
+    expect(formatShow(item(2, 'up_next'), new Map(), []).split('\n')[1]).toBe('Up Next · unassigned · #ux');
+  });
 });

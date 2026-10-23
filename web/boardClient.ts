@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { applyOp } from '../shared/ops';
 import type { BoardEvent, BoardInfo, Item, Op, OpError, ServerMsg, Snapshot } from '../shared/types';
-import { api, boardApi, wsUrl } from './api';
+import { account, api, boardApi, wsUrl } from './api';
 
 // Live board state for one tab. The server decides (FR-7): `confirmed` holds what the board Durable
 // Object has acknowledged, and pending local ops are re-applied on top of it with the same pure
@@ -167,8 +167,11 @@ export class BoardClient {
   private recompute(extra: Partial<State> = {}) {
     const view = new Map(this.confirmed);
     const now = new Date().toISOString();
+    // Who can be assigned, as of sign-in; the server checks again.
+    const entry = account()?.boards.find(b => b.owner.toLowerCase() === this.board.owner.toLowerCase() && b.repo.toLowerCase() === this.board.repo.toLowerCase());
+    const editors = new Map((entry?.editors ?? []).map(login => [login, null]));
     for (const p of this.pending) {
-      const res = applyOp(view, p.op, { actor: { user: this.me, via: 'web' }, now, newId: p.tempId });
+      const res = applyOp(view, p.op, { actor: { user: this.me, via: 'web' }, now, newId: p.tempId, editors });
       if (res.ok && !res.noop) view.set(res.after.id, res.after);
     }
     this.set({ items: view, ...extra });

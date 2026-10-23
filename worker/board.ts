@@ -1,7 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
 import { checkImport, importedItem } from '../shared/import';
-import { applyOp, columnItems, idKey, inversePatch, rankFor, resolveId } from '../shared/ops';
+import { applyOp, claimFor, columnItems, idKey, inversePatch, rankFor, resolveId } from '../shared/ops';
 import { CLIENT_SOURCES, SESSION_TTL_MS, type Actor, type BoardEvent, type BoardInfo, type ClientMsg, type EventMeta, type ImportItem, type Item, type MyWorkBoard, type Op, type OpError, type Role, type ServerMsg, type Snapshot } from '../shared/types';
+import { editorsOf } from './directory';
 import { ingest, type GhFacts } from './ingest';
 import { buildSeed } from './seed';
 
@@ -23,6 +24,7 @@ export function refuseClientOp(op: Op | null | undefined): string | null {
   if (op.op === 'create' && op.source !== undefined && !(CLIENT_SOURCES as readonly string[]).includes(op.source)) {
     return `An item's source can only be ${CLIENT_SOURCES.join(', ')}`;
   }
+  if (op.op === 'claim' && op.user !== undefined && typeof op.user !== 'string') return 'A claim’s user must be a login';
   return null;
 }
 
@@ -65,6 +67,8 @@ export class BoardDO extends DurableObject<Env> {
   private seen = new Map<string, { at: number; stored: number }>();
   /** When the alarm is set for, as far as this instance knows. */
   private alarmAt: number | null = null;
+  /** Client ops in arrival order: an assignment waits on D1, and what's sent after it mustn't overtake it. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -245,11 +249,22 @@ export class BoardDO extends DurableObject<Env> {
     return { duplicate, changes: changed.length };
   }
 
-  apply(info: BoardInfo, op: Op, actor: Actor, clientOpId?: string): ApplyOutcome {
+  /** A client's op. Ops are applied one at a time, in the order they arrived. */
+  apply(info: BoardInfo, op: Op, actor: Actor, clientOpId?: string): Promise<ApplyOutcome> {
+    const next = this.queue.then(() => this.applyNow(info, op, actor, clientOpId));
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  private async applyNow(info: BoardInfo, op: Op, actor: Actor, clientOpId?: string): Promise<ApplyOutcome> {
     this.ensure(info);
+    // Only someone who can edit the board can be assigned an item. Who that is lives in D1, next to
+    // the roles the Worker checks against GitHub.
+    const assigning = op.op === 'claim' && claimFor(op, actor) !== (actor.user ?? 'github');
+    const editors = assigning ? await editorsOf(this.env, this.info!.owner, this.info!.repo) : undefined;
     let outcome: ApplyOutcome;
     this.ctx.storage.transactionSync(() => {
-      outcome = this.applyInner(op, actor);
+      outcome = this.applyInner(op, actor, editors);
     });
     outcome = outcome!;
     if (outcome.ok && !('noop' in outcome)) {
@@ -395,7 +410,7 @@ export class BoardDO extends DurableObject<Env> {
     return changed.length;
   }
 
-  private applyInner(op: Op, actor: Actor): ApplyOutcome {
+  private applyInner(op: Op, actor: Actor, editors?: ReadonlyMap<string, string | null>): ApplyOutcome {
     const now = new Date().toISOString();
     let undid: string | undefined;
     if (op.op === 'undo') {
@@ -408,7 +423,7 @@ export class BoardDO extends DurableObject<Env> {
       op = { op: 'restore', id: row.item_id, fields, undoOf: op.seq };
     }
     const newId = op.op === 'create' ? `${this.info!.prefix}-${String(this.nextNum).padStart(3, '0')}` : undefined;
-    const res = applyOp(this.items, op, { actor, now, newId });
+    const res = applyOp(this.items, op, { actor, now, newId, ...(editors ? { editors } : {}) });
     if (!res.ok) return res;
     if (res.noop) return { ok: true, noop: true, item: res.item };
     if (op.op === 'create') {
@@ -458,7 +473,7 @@ export class BoardDO extends DurableObject<Env> {
       if (role !== 'edit') return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'forbidden', message: 'You can view this board but not change it.' } });
       const refused = refuseClientOp(msg.op);
       if (refused) return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'invalid', message: refused } });
-      const out = this.apply(this.info!, msg.op, { user, via: 'web' }, msg.clientOpId);
+      const out = await this.apply(this.info!, msg.op, { user, via: 'web' }, msg.clientOpId);
       if (!out.ok) this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: out.error });
       else if ('noop' in out) this.send(ws, { type: 'ack', clientOpId: msg.clientOpId });
     } else if (msg.type === 'sync') {

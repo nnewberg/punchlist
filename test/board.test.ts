@@ -65,6 +65,47 @@ describe('BoardDO', () => {
   });
 });
 
+describe('assigning (PL-006)', () => {
+  // A board with its own name, and who can edit it as the Worker last checked (FR-2).
+  async function boardWith(roles: Record<string, 'edit' | 'view'>) {
+    const repo = `assign-${crypto.randomUUID().slice(0, 8)}`;
+    const repoId = Math.floor(Math.random() * 1e9);
+    const t = new Date().toISOString();
+    const ids: Record<string, number> = { nick: 1, aaron: 2, kevin: 3 };
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO boards (repo_id, owner, repo, prefix, installation_id, archived_at, created_at) VALUES (?, 'nnewberg', ?, 'AS', NULL, NULL, ?)`).bind(repoId, repo, t),
+      ...Object.entries(ids).map(([login, id]) => env.DB.prepare(`INSERT OR IGNORE INTO users (id, login, name, avatar_url, created_at) VALUES (?, ?, ?, NULL, ?)`).bind(id, login, login === 'aaron' ? 'Aaron Smith' : null, t)),
+      ...Object.entries(roles).map(([login, role]) => env.DB.prepare(`INSERT INTO access (user_id, repo_id, role, checked_at) VALUES (?, ?, ?, ?)`).bind(ids[login]!, repoId, role, t)),
+    ]);
+    const b = stub();
+    const at: BoardInfo = { owner: 'nnewberg', repo, prefix: 'AS' };
+    await b.apply(at, { op: 'create', title: 'x', status: 'up_next' }, nick);
+    return { b, at };
+  }
+
+  it('assigns someone who can edit the board, by their name in the history', async () => {
+    const { b, at } = await boardWith({ nick: 'edit', aaron: 'edit' });
+    const out = await b.apply(at, { op: 'claim', id: 'AS-001', user: 'aaron' }, nick);
+    expect(out.ok && out.item.claim).toMatchObject({ user: 'aaron', kind: 'manual' });
+    expect((await b.history(at, 'AS-001'))[0]!.meta?.text).toBe('Assigned to Aaron Smith');
+  });
+
+  it('refuses a viewer, or someone with no access', async () => {
+    const { b, at } = await boardWith({ nick: 'edit', kevin: 'view' });
+    for (const user of ['kevin', 'mallory']) {
+      const out = await b.apply(at, { op: 'claim', id: 'AS-001', user }, nick);
+      expect(!out.ok && out.error.code).toBe('invalid');
+    }
+    expect((await b.snapshot(at)).items[0]!.claim).toBeNull();
+  });
+
+  it('applies ops in the order they arrive, even when an assignment waits on the directory', async () => {
+    const { b, at } = await boardWith({ nick: 'edit', aaron: 'edit' });
+    await Promise.all([b.apply(at, { op: 'claim', id: 'AS-001', user: 'aaron' }, nick), b.apply(at, { op: 'release', id: 'AS-001' }, nick)]);
+    expect((await b.snapshot(at)).items[0]!.claim).toBeNull();
+  });
+});
+
 describe('Claude session claims (FR-24, FR-28)', () => {
   const HOUR = 3600_000;
   const claude = (session: string, user = 'nick') => ({ user, via: 'claude' as const, session });

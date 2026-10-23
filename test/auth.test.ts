@@ -130,6 +130,28 @@ describe('access follows GitHub (FR-2)', () => {
     expect(((await ok.json()) as { item: { id: string } }).item.id).toMatch(/^BB-\d+$/);
   });
 
+  it('lists who can edit each board, and only they can be assigned (PL-006)', async () => {
+    await seedBoards();
+    await signedIn('kevin-r', 10);
+    await env.DB.prepare(`INSERT INTO access (user_id, repo_id, role, checked_at) VALUES (10, 502, 'view', ?)`).bind(new Date().toISOString()).run();
+    const cookie = await signedIn();
+    gh.perms = { 'big-talk:aaron-t': 'write', 'bulletin-bee:aaron-t': 'write' };
+    const me = (await (await call('/v1/me', { cookie })).json()) as Me;
+    expect(me.boards.find(b => b.repo === 'bulletin-bee')?.editors).toEqual(['aaron-t']);
+    expect(me.people['kevin-r']).toBeDefined(); // a viewer is still shown by name
+
+    const post = (op: unknown) => call('/v1/boards/nnewberg/bulletin-bee/ops', { method: 'POST', body: JSON.stringify(op), cookie, headers: { origin: ORIGIN } });
+    const { item } = (await (await post({ op: 'create', title: 'assign me' })).json()) as { item: { id: string } };
+    const assign = (user: string) => post({ op: 'claim', id: item.id, user });
+    const refused = await assign('kevin-r');
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error: { message: string } }).error.message).toMatch(new RegExp(`^kevin-r can’t be assigned ${item.id}`));
+    expect((await assign('not-a-login')).status).toBe(409);
+    expect((await post({ op: 'claim', id: item.id, user: 7 })).status).toBe(400);
+    const ok = await assign('@Aaron-T'); // yourself, written loosely
+    expect(((await ok.json()) as { item: { claim: { user: string } } }).item.claim.user).toBe('aaron-t');
+  });
+
   it('a viewer’s live connection cannot send changes either', async () => {
     const stub = env.BOARD.get(env.BOARD.idFromName(`repo:${crypto.randomUUID()}`));
     const res = await stub.fetch(new Request('https://x/ws', {
