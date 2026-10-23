@@ -211,14 +211,37 @@ export async function boardsFor(env: Env, user: User): Promise<(Board & { role: 
   return boards.flatMap((b, i) => (roles[i] === 'none' ? [] : [{ ...b, role: roles[i] as Exclude<Role, 'none'> }]));
 }
 
-/** Names and avatars of everyone with access to these boards, for showing claims, notes and presence. */
-export async function peopleOn(env: Env, repoIds: number[]): Promise<Record<string, PersonInfo>> {
-  if (!repoIds.length) return {};
+/**
+ * Names and avatars of everyone with access to these boards, for showing claims, notes and presence,
+ * and who can edit each board, for assigning its items. Only people who have signed in to Punchlist
+ * have an access row, so a collaborator who never has isn't listed.
+ */
+export async function peopleOn(env: Env, repoIds: number[]): Promise<{ people: Record<string, PersonInfo>; editors: Record<number, string[]> }> {
+  if (!repoIds.length) return { people: {}, editors: {} };
   const { results } = await env.DB.prepare(
-    `SELECT DISTINCT u.login, u.name, u.avatar_url FROM access a JOIN users u ON u.id = a.user_id
-     WHERE a.role != 'none' AND a.repo_id IN (${repoIds.map(() => '?').join(',')})`,
-  ).bind(...repoIds).all<{ login: string; name: string | null; avatar_url: string | null }>();
-  return Object.fromEntries(results.map(r => [r.login, { name: r.name, avatar: r.avatar_url }]));
+    `SELECT u.login, u.name, u.avatar_url, a.repo_id, a.role FROM access a JOIN users u ON u.id = a.user_id
+     WHERE a.role != 'none' AND a.repo_id IN (${repoIds.map(() => '?').join(',')}) ORDER BY u.login`,
+  ).bind(...repoIds).all<{ login: string; name: string | null; avatar_url: string | null; repo_id: number; role: Role }>();
+  const people: Record<string, PersonInfo> = {};
+  const editors: Record<number, string[]> = {};
+  for (const r of results) {
+    people[r.login] = { name: r.name, avatar: r.avatar_url };
+    if (r.role === 'edit') (editors[r.repo_id] ??= []).push(r.login);
+  }
+  return { people, editors };
+}
+
+/**
+ * Who can be assigned items on a board, by login, with their names: the people whose last checked role
+ * on it is edit. Looked up by repo id, which survives renames. Read by the board's Durable Object,
+ * which can't ask GitHub itself (PRD §8), so a role is as fresh as that person's last visit, when FR-2
+ * re-checks it.
+ */
+export async function editorsOf(env: Env, repoId: number): Promise<Map<string, string | null>> {
+  const { results } = await env.DB.prepare(
+    `SELECT u.login, u.name FROM access a JOIN users u ON u.id = a.user_id WHERE a.repo_id = ? AND a.role = 'edit'`,
+  ).bind(repoId).all<{ login: string; name: string | null }>();
+  return new Map(results.map(r => [r.login.toLowerCase(), r.name]));
 }
 
 // ---- Users ----

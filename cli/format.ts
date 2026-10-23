@@ -115,7 +115,8 @@ export function formatCompact(snap: Snapshot, viewer: Viewer = {}): string {
 }
 
 export function formatShow(it: Item, items: ReadonlyMap<string, Item>, history: BoardEvent[]): string {
-  const facts = [STATUS_LABEL[it.status], holder(it) ?? 'unclaimed'];
+  const h = holder(it);
+  const facts = [STATUS_LABEL[it.status], h ? `assigned to ${h}` : 'unassigned'];
   if (it.tags.length) facts.push(it.tags.map(t => `#${t}`).join(' '));
   const why = blockedWhy(it, items);
   if (why) facts.push(c.red(`⊘ ${why}`));

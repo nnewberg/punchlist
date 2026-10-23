@@ -1,7 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
 import { checkImport, importedItem } from '../shared/import';
-import { applyOp, columnItems, idKey, inversePatch, rankFor, resolveId } from '../shared/ops';
+import { applyOp, claimFor, columnItems, idKey, inversePatch, rankFor, resolveId } from '../shared/ops';
 import { CLIENT_SOURCES, SESSION_TTL_MS, type Actor, type BoardEvent, type BoardInfo, type ClientMsg, type EventMeta, type ImportItem, type Item, type MyWorkBoard, type Op, type OpError, type Role, type ServerMsg, type Snapshot } from '../shared/types';
+import { editorsOf } from './directory';
 import { ingest, type GhFacts } from './ingest';
 import { buildSeed } from './seed';
 
@@ -23,6 +24,7 @@ export function refuseClientOp(op: Op | null | undefined): string | null {
   if (op.op === 'create' && op.source !== undefined && !(CLIENT_SOURCES as readonly string[]).includes(op.source)) {
     return `An item's source can only be ${CLIENT_SOURCES.join(', ')}`;
   }
+  if (op.op === 'claim' && op.user !== undefined && typeof op.user !== 'string') return 'A claim’s user must be a login';
   return null;
 }
 
@@ -47,6 +49,9 @@ interface EventRow extends Record<string, SqlStorageValue> {
 const RESYNC_AFTER = 500;
 /** How long a webhook delivery ID is remembered, to ignore GitHub's repeats (FR-29). */
 const DELIVERY_TTL_MS = 30 * 86400_000;
+/** How long the board trusts its list of who can be assigned, and how long it waits for D1 to read it. */
+const EDITORS_FRESH_MS = 60_000;
+const EDITORS_TIMEOUT_MS = 2_000;
 /** A session's last heartbeat is written at most this often (§8: no write per heartbeat). */
 const HEARTBEAT_WRITE_MS = 10 * 60_000;
 
@@ -61,10 +66,16 @@ export class BoardDO extends DurableObject<Env> {
   private info: BoardInfo | null = null;
   private seq = 0;
   private nextNum = 1;
+  /** The repo this board is for, from its name (`repo:<id>`), which outlasts renames. */
+  private repoId: number | null = null;
   /** Last heartbeat per Claude session, in ms. Kept in memory; written to `sessions` coarsely. */
   private seen = new Map<string, { at: number; stored: number }>();
   /** When the alarm is set for, as far as this instance knows. */
   private alarmAt: number | null = null;
+  /** Client ops in arrival order: an assignment may wait on D1, and what's sent after it mustn't overtake it. */
+  private queue: Promise<unknown> = Promise.resolve();
+  /** Who can be assigned, as last read from D1. */
+  private editors: { at: number; map: ReadonlyMap<string, string | null> } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -93,6 +104,10 @@ export class BoardDO extends DurableObject<Env> {
     if (meta.has('info')) this.info = JSON.parse(meta.get('info')!);
     this.seq = Number(meta.get('seq') ?? 0);
     this.nextNum = Number(meta.get('next_num') ?? 1);
+    // `ctx.id.name` isn't promised when a hibernated socket wakes the object, so keep the id once seen.
+    const named = /^repo:(\d+)$/.exec(this.ctx.id.name ?? '')?.[1];
+    if (named && meta.get('repo_id') !== named) this.setMeta('repo_id', named);
+    this.repoId = Number(named ?? meta.get('repo_id')) || null;
     for (const r of this.sql.exec<{ json: string }>(`SELECT json FROM items`)) {
       const it = JSON.parse(r.json) as Item;
       this.items.set(it.id, it);
@@ -245,11 +260,29 @@ export class BoardDO extends DurableObject<Env> {
     return { duplicate, changes: changed.length };
   }
 
-  apply(info: BoardInfo, op: Op, actor: Actor, clientOpId?: string): ApplyOutcome {
+  /** A client's op. Ops are applied one at a time, in the order they arrived. */
+  apply(info: BoardInfo, op: Op, actor: Actor, clientOpId?: string): Promise<ApplyOutcome> {
+    const next = this.queue.then(() => this.applyNow(info, op, actor, clientOpId));
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  private async applyNow(info: BoardInfo, op: Op, actor: Actor, clientOpId?: string): Promise<ApplyOutcome> {
     this.ensure(info);
+    // Only someone who can edit the board can be assigned an item. Otherwise the last list read is
+    // enough, for names in the history.
+    let editors = this.editors?.map;
+    if (op.op === 'claim' && claimFor(op, actor) !== (actor.user ?? 'github')) {
+      try {
+        editors = await this.editorsFor(claimFor(op, actor));
+      } catch (e) {
+        console.error('reading editors failed', e);
+        return { ok: false, error: { code: 'invalid', message: 'Couldn’t check who can be assigned. Try again.' } };
+      }
+    }
     let outcome: ApplyOutcome;
     this.ctx.storage.transactionSync(() => {
-      outcome = this.applyInner(op, actor);
+      outcome = this.applyInner(op, actor, editors);
     });
     outcome = outcome!;
     if (outcome.ok && !('noop' in outcome)) {
@@ -257,6 +290,28 @@ export class BoardDO extends DurableObject<Env> {
       this.scheduleLapse();
     }
     return outcome;
+  }
+
+  /**
+   * Who can be assigned, from D1, where the Worker records each person's role (FR-2). A list under a
+   * minute old is used as is when it has `login`; otherwise it's read again, so someone who just signed
+   * in can be assigned straight away. The read gives up after 2 s, since every op waits behind it.
+   */
+  private async editorsFor(login: string): Promise<ReadonlyMap<string, string | null>> {
+    const c = this.editors;
+    if (c && Date.now() - c.at < EDITORS_FRESH_MS && c.map.has(login)) return c.map;
+    // By repo id, not the name the board shows, which can belong to another repo after a rename.
+    const repoId = this.repoId;
+    if (!repoId) throw new Error(`board ${this.ctx.id.name ?? this.ctx.id.toString()} isn't named for a repo id`);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error('D1 took too long')), EDITORS_TIMEOUT_MS)));
+    try {
+      const map = await Promise.race([editorsOf(this.env, repoId), timeout]);
+      this.editors = { at: Date.now(), map };
+      return map;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ---- Import (PRD §7.9) ----
@@ -395,7 +450,7 @@ export class BoardDO extends DurableObject<Env> {
     return changed.length;
   }
 
-  private applyInner(op: Op, actor: Actor): ApplyOutcome {
+  private applyInner(op: Op, actor: Actor, editors?: ReadonlyMap<string, string | null>): ApplyOutcome {
     const now = new Date().toISOString();
     let undid: string | undefined;
     if (op.op === 'undo') {
@@ -408,7 +463,7 @@ export class BoardDO extends DurableObject<Env> {
       op = { op: 'restore', id: row.item_id, fields, undoOf: op.seq };
     }
     const newId = op.op === 'create' ? `${this.info!.prefix}-${String(this.nextNum).padStart(3, '0')}` : undefined;
-    const res = applyOp(this.items, op, { actor, now, newId });
+    const res = applyOp(this.items, op, { actor, now, newId, ...(editors ? { editors } : {}) });
     if (!res.ok) return res;
     if (res.noop) return { ok: true, noop: true, item: res.item };
     if (op.op === 'create') {
@@ -458,7 +513,14 @@ export class BoardDO extends DurableObject<Env> {
       if (role !== 'edit') return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'forbidden', message: 'You can view this board but not change it.' } });
       const refused = refuseClientOp(msg.op);
       if (refused) return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'invalid', message: refused } });
-      const out = this.apply(this.info!, msg.op, { user, via: 'web' }, msg.clientOpId);
+      let out: ApplyOutcome;
+      try {
+        out = await this.apply(this.info!, msg.op, { user, via: 'web' }, msg.clientOpId);
+      } catch (e) {
+        // Answer every op, or the tab keeps it pending forever.
+        console.error('op failed', e);
+        return this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: { code: 'invalid', message: 'Something went wrong saving that. Try again.' } });
+      }
       if (!out.ok) this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: out.error });
       else if ('noop' in out) this.send(ws, { type: 'ack', clientOpId: msg.clientOpId });
     } else if (msg.type === 'sync') {

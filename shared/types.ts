@@ -89,7 +89,11 @@ export type Op =
   | { op: 'create'; title: string; body?: string; status?: Column; tags?: string[]; source?: Item['source']['kind'] }
   | { op: 'move'; id: string; status: Status; beforeId?: string | null }
   | { op: 'edit'; id: string; title?: string; body?: string; baseBodyVersion?: number }
-  | { op: 'claim'; id: string; kind?: Claim['kind']; ref?: string; steal?: boolean }
+  /**
+   * Claims the item for the actor, or with `user` assigns it to someone else who can edit the board:
+   * a manual claim made on their behalf. `steal` overrides a third person's claim (FR-27).
+   */
+  | { op: 'claim'; id: string; kind?: Claim['kind']; ref?: string; steal?: boolean; user?: string }
   /** `reason` replaces "Released" in the history, e.g. when a session ends or its claim lapses. */
   | { op: 'release'; id: string; reason?: string }
   | { op: 'block'; id: string; reason: string }
@@ -177,6 +181,8 @@ export type Role = 'edit' | 'view' | 'none';
 /** A board as listed for one person, with their role on it. */
 export interface BoardEntry extends BoardInfo {
   role: Exclude<Role, 'none'>;
+  /** Logins of the people who can edit it, so can be assigned its items (empty for a viewer). Only people who have signed in to Punchlist are known. */
+  editors: string[];
 }
 
 /** How to show someone: their GitHub name and avatar. Keyed by login. */

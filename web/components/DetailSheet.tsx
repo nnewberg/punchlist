@@ -4,7 +4,7 @@ import { person } from '../../shared/config';
 import { age, openDeps, workBranch } from '../../shared/derive';
 import { githubUrl, shortSha } from '../../shared/github';
 import { STATUS_LABEL } from '../../shared/ops';
-import { COLUMNS, type BoardEvent, type BoardInfo, type Column, type Item, type OpError } from '../../shared/types';
+import { COLUMNS, type BoardEvent, type BoardInfo, type Column, type Item, type Op, type OpError } from '../../shared/types';
 import { api, boardApi } from '../api';
 import type { BoardClient } from '../boardClient';
 import { Avatar, ChevronIcon, CloseIcon, Field, Glyph, InlineInput, TrashIcon, useDismiss } from './ui';
@@ -15,7 +15,8 @@ import { Avatar, ChevronIcon, CloseIcon, Field, Glyph, InlineInput, TrashIcon, u
 export function DetailSheet({ item, items, board, client, onClose, onOpen, onDeleted, readOnly = false }: {
   item: Item;
   items: ReadonlyMap<string, Item>;
-  board: BoardInfo;
+  /** `editors`: who can be assigned its items. */
+  board: BoardInfo & { editors?: string[] };
   client: BoardClient;
   onClose: () => void;
   onOpen: (id: string) => void;
@@ -54,9 +55,6 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
 
   const done = item.status === 'done';
   const dropped = item.status === 'dropped';
-  const claim = item.claim;
-  const branch = workBranch(item);
-  const mine = claim?.user === client.me;
   const pendingFix = item.citations.filter(c => c.kind === 'pending' && !c.reverted);
   const closes = item.citations.filter(c => c.kind === 'closes' && !c.reverted);
   const deps = openDeps(item, items);
@@ -105,28 +103,10 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                 <StatusPicker item={item} onMove={status => send({ op: 'move', id: item.id, status, beforeId: 'top' })} />
               )}
             </Field>
-            <Field label="Claim">
-              {claim ? (
-                <>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    <Avatar user={claim.user} />
-                    <span style={{ fontWeight: 500 }}>{person(claim.user).name}</span>
-                    {branch && (<><span style={{ color: 'var(--fg3)' }}>·</span><span className="mono" style={{ fontSize: 11.5, color: 'var(--fg2)' }}>{branch}</span></>)}
-                    {claim.kind === 'session' && <span className="badge-agent" title={claim.ref ? `Claude session ${claim.ref}` : 'Claude session'}>✦ Claude</span>}
-                    {!done && <span style={{ color: 'var(--fg3)' }}>· {age(claim.since)}</span>}
-                  </span>
-                  {!done && !dropped && !ro && (mine
-                    ? <button className="btn-sm" onClick={() => send({ op: 'release', id: item.id })}>Release</button>
-                    : <button className="btn-sm" onClick={() => send({ op: 'claim', id: item.id, steal: true })} title={`Take this over from ${person(claim.user).name}; the log records it`}>Take over</button>)}
-                </>
-              ) : (
-                <>
-                  {branch
-                    ? <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg2)' }}>{branch}</span>
-                    : <span style={{ color: 'var(--fg3)' }}>Unclaimed</span>}
-                  {!done && !dropped && !ro && <button className="btn-sm" onClick={() => send({ op: 'claim', id: item.id })}>Claim</button>}
-                </>
-              )}
+            <Field label="Assignee">
+              {done || dropped || ro
+                ? <Assignee item={item} />
+                : <AssigneePicker item={item} editors={board.editors ?? []} me={client.me} send={send} />}
             </Field>
             <Field label="Tags">
               {item.tags.map(t => (
@@ -239,30 +219,94 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
 
 // Moving here instead of dragging (FR-11 claims on In Progress). Lands at the top of the column, as
 // reopen and release do, so it's easy to find on the board.
-function StatusPicker({ item, onMove }: { item: Item; onMove: (status: Column) => void }) {
+/**
+ * A pill that opens a menu below it, or above when the sheet body has no room below (it scrolls).
+ * Picking from the menu should close it and hand focus back to the pill.
+ */
+function usePillMenu(menuHeight: number) {
   const [open, setOpen] = useState<null | 'down' | 'up'>(null);
   const close = useCallback(() => setOpen(null), []);
   const ref = useDismiss<HTMLSpanElement>(!!open, close);
   const pill = useRef<HTMLButtonElement>(null);
-  // The sheet body scrolls, so open upward when the menu wouldn't fit below the pill.
   const toggle = () => {
     if (open) return close();
     const r = pill.current!.getBoundingClientRect();
     const body = pill.current!.closest('.sheet-body')!.getBoundingClientRect();
-    setOpen(body.bottom - r.bottom < 130 && r.top - body.top > body.bottom - r.bottom ? 'up' : 'down');
+    setOpen(body.bottom - r.bottom < menuHeight && r.top - body.top > body.bottom - r.bottom ? 'up' : 'down');
   };
+  const done = () => (close(), pill.current?.focus());
+  const at = open === 'up' ? { bottom: 28 } : { top: 28 };
+  return { open: !!open, toggle, done, ref, pill, at };
+}
+
+function StatusPicker({ item, onMove }: { item: Item; onMove: (status: Column) => void }) {
+  const m = usePillMenu(130);
   return (
-    <span ref={ref} style={{ position: 'relative' }}>
-      <button ref={pill} className="pill status-btn" aria-expanded={!!open} onClick={toggle}>
+    <span ref={m.ref} style={{ position: 'relative' }}>
+      <button ref={m.pill} className="pill status-btn" aria-expanded={m.open} onClick={m.toggle}>
         <Glyph status={item.status} />{STATUS_LABEL[item.status]}<ChevronIcon />
       </button>
-      {open && (
-        <div className="menu" style={{ ...(open === 'up' ? { bottom: 28 } : { top: 28 }), left: 0, minWidth: 160 }}>
+      {m.open && (
+        <div className="menu" style={{ ...m.at, left: 0, minWidth: 160 }}>
           {COLUMNS.filter(s => s !== item.status).map(s => (
-            <button key={s} className="menu-item" onClick={() => (close(), pill.current?.focus(), onMove(s))}>
+            <button key={s} className="menu-item" onClick={() => (m.done(), onMove(s))}>
               <Glyph status={s} />{STATUS_LABEL[s]}
             </button>
           ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+/** Who holds the item: avatar and name, its branch (for a Done item, the one it was done on) or Claude session, and for how long. */
+function Assignee({ item }: { item: Item }) {
+  const claim = item.claim;
+  const branch = workBranch(item);
+  const done = item.status === 'done';
+  if (!claim) return branch ? <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg2)' }}>{branch}</span> : <span style={{ color: 'var(--fg3)' }}>Unassigned</span>;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <Avatar user={claim.user} />
+      <span style={{ fontWeight: 500 }}>{person(claim.user).name}</span>
+      {branch && (<><span style={{ color: 'var(--fg3)' }}>·</span><span className="mono" style={{ fontSize: 11.5, color: 'var(--fg2)' }}>{branch}</span></>)}
+      {claim.kind === 'session' && <span className="badge-agent" title={claim.ref ? `Claude session ${claim.ref}` : 'Claude session'}>✦ Claude</span>}
+      {!done && <span style={{ color: 'var(--fg3)' }}>· {age(claim.since)}</span>}
+    </span>
+  );
+}
+
+// Picking yourself claims it, picking someone else assigns it to them, and Unassigned releases it.
+// Either of the first two takes it from whoever has it now, and the log records it (FR-27).
+function AssigneePicker({ item, editors, me, send }: { item: Item; editors: string[]; me: string; send: (op: Op) => unknown }) {
+  const people = [me, ...editors.filter(l => l !== me).sort((a, b) => person(a).name.localeCompare(person(b).name))];
+  const m = usePillMenu(36 * (people.length + 1) + 24);
+  const holder = item.claim?.user;
+  const pick = (login: string | null) => {
+    m.done();
+    // Picking whoever has it changes nothing, except that it makes a Claude session's claim, which lapses, a lasting one.
+    if (login === (holder ?? null) && item.claim?.kind !== 'session') return;
+    if (!login) send({ op: 'release', id: item.id });
+    else send({ op: 'claim', id: item.id, ...(login !== me ? { user: login } : {}), ...(holder ? { steal: true } : {}) });
+  };
+  return (
+    <span ref={m.ref} style={{ position: 'relative' }}>
+      <button ref={m.pill} className="pill status-btn" aria-expanded={m.open} onClick={m.toggle}>
+        <Assignee item={item} /><ChevronIcon />
+      </button>
+      {m.open && (
+        <div className="menu" style={{ ...m.at, left: 0 }}>
+          {people.map(login => (
+            <button key={login} className={`menu-item${login === holder ? ' current' : ''}`} onClick={() => pick(login)}>
+              <Avatar user={login} />
+              {person(login).name}
+              {login === me && <span style={{ color: 'var(--fg3)' }}>you</span>}
+            </button>
+          ))}
+          <div className="menu-sep" />
+          <button className={`menu-item${holder ? '' : ' current'}`} onClick={() => pick(null)}>
+            <span style={{ color: 'var(--fg3)' }}>Unassigned</span>
+          </button>
         </div>
       )}
     </span>
