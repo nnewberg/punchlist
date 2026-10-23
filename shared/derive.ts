@@ -32,3 +32,15 @@ export function matchesQuery(it: Item, q: string): boolean {
   return [it.id, it.title, it.body, ...it.tags, ...it.aliases, ...it.notes.map(n => n.text), it.claim?.ref ?? '']
     .some(s => s.toLowerCase().includes(needle));
 }
+
+/**
+ * The branch an item's work is on, for the card and the claim row: its branch claim's, or once it's
+ * Done, the head branch of the PR that closed it. A direct push to main has none. Only the current
+ * close counts: a PR that closed it before it was reopened isn't the work that finished it.
+ */
+export function workBranch(it: Item): string | undefined {
+  if (it.claim?.kind === 'branch' && it.claim.ref) return it.claim.ref;
+  if (it.status !== 'done') return undefined;
+  const since = it.closed_at ?? '';
+  return [...it.citations].reverse().find(c => c.kind === 'closes' && !c.reverted && c.head && c.at >= since)?.head;
+}

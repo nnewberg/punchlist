@@ -292,6 +292,27 @@ export class BoardDO extends DurableObject<Env> {
     return { ok: true, ids };
   }
 
+  /**
+   * One-off backfill (scripts/backfill-heads.mjs): merged PRs' head branches, by PR number, for closes
+   * citations made before they were recorded. Each is a `link_pr`, so it fills in only what's missing
+   * and lands in the log like the merge would have. Returns the items it changed.
+   */
+  recordHeads(info: BoardInfo, heads: Record<string, string>, actor: Actor): { ok: true; ids: string[] } {
+    this.ensure(info);
+    const changed: { event: BoardEvent; item: Item }[] = [];
+    this.ctx.storage.transactionSync(() => {
+      for (const it of [...this.items.values()]) {
+        const prs = new Set(it.citations.flatMap(c => (c.kind === 'closes' && c.pr && !c.head && heads[c.pr] ? [c.pr] : [])));
+        for (const pr of prs) {
+          const out = this.applyInner({ op: 'link_pr', id: it.id, pr, commits: [], head: heads[pr] }, actor);
+          if (out.ok && !('noop' in out)) changed.push(out);
+        }
+      }
+    });
+    for (const c of changed) this.broadcast({ type: 'event', event: c.event, item: c.item });
+    return { ok: true, ids: [...new Set(changed.map(c => c.item.id))] };
+  }
+
   // ---- Claude sessions (FR-24, FR-28) ----
 
   /**

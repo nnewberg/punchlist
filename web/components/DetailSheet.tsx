@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import { person } from '../../shared/config';
-import { age, openDeps } from '../../shared/derive';
+import { age, openDeps, workBranch } from '../../shared/derive';
 import { githubUrl, shortSha } from '../../shared/github';
 import { STATUS_LABEL } from '../../shared/ops';
 import { COLUMNS, type BoardEvent, type BoardInfo, type Column, type Item, type OpError } from '../../shared/types';
@@ -55,6 +55,7 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
   const done = item.status === 'done';
   const dropped = item.status === 'dropped';
   const claim = item.claim;
+  const branch = workBranch(item);
   const mine = claim?.user === client.me;
   const pendingFix = item.citations.filter(c => c.kind === 'pending' && !c.reverted);
   const closes = item.citations.filter(c => c.kind === 'closes' && !c.reverted);
@@ -110,7 +111,7 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                     <Avatar user={claim.user} />
                     <span style={{ fontWeight: 500 }}>{person(claim.user).name}</span>
-                    {claim.kind === 'branch' && claim.ref && (<><span style={{ color: 'var(--fg3)' }}>·</span><span className="mono" style={{ fontSize: 11.5, color: 'var(--fg2)' }}>{claim.ref}</span></>)}
+                    {branch && (<><span style={{ color: 'var(--fg3)' }}>·</span><span className="mono" style={{ fontSize: 11.5, color: 'var(--fg2)' }}>{branch}</span></>)}
                     {claim.kind === 'session' && <span className="badge-agent" title={claim.ref ? `Claude session ${claim.ref}` : 'Claude session'}>✦ Claude</span>}
                     {!done && <span style={{ color: 'var(--fg3)' }}>· {age(claim.since)}</span>}
                   </span>
@@ -120,7 +121,9 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                 </>
               ) : (
                 <>
-                  <span style={{ color: 'var(--fg3)' }}>Unclaimed</span>
+                  {branch
+                    ? <span className="mono" style={{ fontSize: 11.5, color: 'var(--fg2)' }}>{branch}</span>
+                    : <span style={{ color: 'var(--fg3)' }}>Unclaimed</span>}
                   {!done && !dropped && !ro && <button className="btn-sm" onClick={() => send({ op: 'claim', id: item.id })}>Claim</button>}
                 </>
               )}
