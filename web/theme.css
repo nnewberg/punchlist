@@ -230,6 +230,9 @@ html.is-dragging, html.is-dragging * { cursor: grabbing !important; -webkit-user
 .sheet-hd .id { font-family: var(--mono); font-size: 12px; color: var(--fg3); }
 .pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: var(--br); background: var(--bg); border: 1px solid var(--line); font-size: 12px; font-weight: 500; }
 .pill .glyph { width: 11px; height: 11px; }
+.status-btn { cursor: pointer; }
+.status-btn:hover, .status-btn[aria-expanded='true'] { background: var(--hover); }
+.menu-item .glyph { width: 11px; height: 11px; }
 .btn-reopen { font-size: 12px; font-weight: 500; height: 24px; padding: 0 10px; border-radius: var(--btn-r); border: 1px solid var(--line); background: var(--card); color: var(--accentFg); cursor: pointer; }
 .btn-reopen:hover { background: var(--hover); }
 .close-btn { width: 26px; height: 26px; border-radius: var(--btn-r); border: 0; background: transparent; color: var(--fg2); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }

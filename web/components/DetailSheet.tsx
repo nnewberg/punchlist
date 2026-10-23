@@ -1,13 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import { person } from '../../shared/config';
 import { age, openDeps } from '../../shared/derive';
 import { githubUrl, shortSha } from '../../shared/github';
 import { STATUS_LABEL } from '../../shared/ops';
-import type { BoardEvent, BoardInfo, Item, OpError } from '../../shared/types';
+import { COLUMNS, type BoardEvent, type BoardInfo, type Column, type Item, type OpError } from '../../shared/types';
 import { api, boardApi } from '../api';
 import type { BoardClient } from '../boardClient';
-import { Avatar, CloseIcon, Field, Glyph, InlineInput, TrashIcon } from './ui';
+import { Avatar, ChevronIcon, CloseIcon, Field, Glyph, InlineInput, TrashIcon, useDismiss } from './ui';
 
 // Item detail, opened as a centered sheet (design 1b). Everything here is editable in place (FR-12),
 // with history and per-event undo from the event log (FR-15). Someone with only read access to the
@@ -45,7 +45,8 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) onClose();
+      // Escape with a menu open closes just the menu (useDismiss).
+      if (e.key === 'Escape' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) && !document.querySelector('.sheet .menu')) onClose();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -97,7 +98,11 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
 
           <div className="fields">
             <Field label="Status">
-              <span className="pill"><Glyph status={item.status} />{STATUS_LABEL[item.status]}</span>
+              {ro || dropped ? (
+                <span className="pill"><Glyph status={item.status} />{STATUS_LABEL[item.status]}</span>
+              ) : (
+                <StatusPicker item={item} onMove={status => send({ op: 'move', id: item.id, status, beforeId: 'top' })} />
+              )}
             </Field>
             <Field label="Claim">
               {claim ? (
@@ -226,6 +231,38 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
         </div>
       </div>
     </>
+  );
+}
+
+// Moving here instead of dragging (FR-11 claims on In Progress). Lands at the top of the column, as
+// reopen and release do, so it's easy to find on the board.
+function StatusPicker({ item, onMove }: { item: Item; onMove: (status: Column) => void }) {
+  const [open, setOpen] = useState<null | 'down' | 'up'>(null);
+  const close = useCallback(() => setOpen(null), []);
+  const ref = useDismiss<HTMLSpanElement>(!!open, close);
+  const pill = useRef<HTMLButtonElement>(null);
+  // The sheet body scrolls, so open upward when the menu wouldn't fit below the pill.
+  const toggle = () => {
+    if (open) return close();
+    const r = pill.current!.getBoundingClientRect();
+    const body = pill.current!.closest('.sheet-body')!.getBoundingClientRect();
+    setOpen(body.bottom - r.bottom < 130 && r.top - body.top > body.bottom - r.bottom ? 'up' : 'down');
+  };
+  return (
+    <span ref={ref} style={{ position: 'relative' }}>
+      <button ref={pill} className="pill status-btn" aria-expanded={!!open} onClick={toggle}>
+        <Glyph status={item.status} />{STATUS_LABEL[item.status]}<ChevronIcon />
+      </button>
+      {open && (
+        <div className="menu" style={{ ...(open === 'up' ? { bottom: 28 } : { top: 28 }), left: 0, minWidth: 160 }}>
+          {COLUMNS.filter(s => s !== item.status).map(s => (
+            <button key={s} className="menu-item" onClick={() => (close(), pill.current?.focus(), onMove(s))}>
+              <Glyph status={s} />{STATUS_LABEL[s]}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
   );
 }
 
