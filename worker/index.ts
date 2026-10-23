@@ -1,3 +1,4 @@
+import { BUILD_ID } from '../shared/build';
 import type { Actor, ImportFile, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
 import { BoardDO, refuseClientOp } from './board';
@@ -29,6 +30,8 @@ export default {
 
     const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
     if (parts[0] !== 'v1') return env.ASSETS.fetch(request);
+    // GET /v1/build: the deployed build, for an open tab to check its own against (PL-014). Nothing private, so no sign-in.
+    if (parts[1] === 'build' && parts.length === 2) return json({ build: BUILD_ID });
 
     await ensureDevSeed(env);
     const who = await resolveUser(request, env);

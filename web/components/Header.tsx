@@ -35,7 +35,7 @@ export function Header({ title, board, boards, viewers, me, query, onQuery, sear
       )}
       <label className="search">
         <SearchIcon />
-        <input ref={searchRef} value={query} placeholder="Search" onChange={e => onQuery(e.target.value)} onKeyDown={e => e.key === 'Escape' && (onQuery(''), e.currentTarget.blur())} />
+        <input ref={searchRef} data-not-draft value={query} placeholder="Search" onChange={e => onQuery(e.target.value)} onKeyDown={e => e.key === 'Escape' && (onQuery(''), e.currentTarget.blur())} />
       </label>
       {filter}
       {onNew && (

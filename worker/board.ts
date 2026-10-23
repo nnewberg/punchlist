@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { BUILD_ID } from '../shared/build';
 import { checkImport, importedItem } from '../shared/import';
 import { applyOp, claimFor, columnItems, idKey, inversePatch, rankFor, resolveId } from '../shared/ops';
 import { CLIENT_SOURCES, SESSION_TTL_MS, type Actor, type BoardEvent, type BoardInfo, type ClientMsg, type EventMeta, type ImportItem, type Item, type MyWorkBoard, type Op, type OpError, type Role, type ServerMsg, type Snapshot } from '../shared/types';
@@ -524,8 +525,9 @@ export class BoardDO extends DurableObject<Env> {
       if (!out.ok) this.send(ws, { type: 'reject', clientOpId: msg.clientOpId, error: out.error });
       else if ('noop' in out) this.send(ws, { type: 'ack', clientOpId: msg.clientOpId });
     } else if (msg.type === 'sync') {
+      // Every tab syncs when its socket opens, and a deploy restarts the board, so this is how open tabs hear of a new build.
       const since = this.eventsSince(this.info!, msg.since);
-      this.send(ws, since ? { type: 'events', ...since } : { type: 'resync', snapshot: this.snapshot(this.info!) });
+      this.send(ws, since ? { type: 'events', ...since, build: BUILD_ID } : { type: 'resync', snapshot: this.snapshot(this.info!), build: BUILD_ID });
     }
   }
 
