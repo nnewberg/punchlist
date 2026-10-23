@@ -74,7 +74,7 @@ export function MyWorkPage({ me, boards }: { me: string; boards: BoardInfo[] }) 
     };
   });
   return (
-    <div className="app">
+    <div className="app" data-view-set={query.trim() !== '' || undefined}>
       <Header title="My work" boards={boards} me={me} query={query} onQuery={setQuery} />
       {data && <Groups groups={groups} query={query} />}
     </div>

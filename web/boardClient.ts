@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { applyOp } from '../shared/ops';
 import type { BoardEvent, BoardInfo, Item, Op, OpError, ServerMsg, Snapshot } from '../shared/types';
 import { account, api, boardApi, wsUrl } from './api';
+import { deployedBuild, watchBoard } from './autoReload';
 
 // Live board state for one tab. The server decides (FR-7): `confirmed` holds what the board Durable
 // Object has acknowledged, and pending local ops are re-applied on top of it with the same pure
@@ -43,6 +44,7 @@ export class BoardClient {
   private keepalive: ReturnType<typeof setInterval> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private listeners = new Set<() => void>();
+  private releaseHold: (() => void) | undefined;
   private state: State = { items: new Map(), viewers: [], conn: 'connecting', loaded: false, missing: false };
   /** Called for changes made elsewhere (another person, tab, agent or GitHub). */
   onRemote?: (c: RemoteChange) => void;
@@ -63,6 +65,8 @@ export class BoardClient {
   }
 
   async start() {
+    // A reload for a new build waits until the board has answered every op, and a live socket reports the build itself (PL-014).
+    this.releaseHold = watchBoard({ busy: () => this.pending.length > 0, live: () => this.ws?.readyState === WebSocket.OPEN });
     try {
       const snap = await api<Snapshot>(boardApi(this.board));
       if (this.stopped) return;
@@ -75,6 +79,7 @@ export class BoardClient {
 
   stop() {
     this.stopped = true;
+    this.releaseHold?.();
     clearInterval(this.keepalive);
     clearTimeout(this.reconnectTimer);
     this.ws?.close();
@@ -122,10 +127,12 @@ export class BoardClient {
         this.applyServerEvent(msg.event, msg.item, msg.clientOpId);
         break;
       case 'events':
+        deployedBuild(msg.build);
         for (const e of msg.events) this.applyServerEvent(e.event, e.item);
         this.seq = Math.max(this.seq, msg.seq);
         break;
       case 'resync':
+        deployedBuild(msg.build);
         this.loadSnapshot(msg.snapshot);
         break;
       case 'reject': {

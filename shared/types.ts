@@ -227,8 +227,9 @@ export type ServerMsg =
   /** The op was valid but changed nothing, so no event was written. */
   | { type: 'ack'; clientOpId: string }
   | { type: 'presence'; viewers: string[] }
-  | { type: 'resync'; snapshot: Snapshot }
-  | { type: 'events'; events: { event: BoardEvent; item: Item }[]; seq: number };
+  /** `build`, on the reply to a sync: the deployed build, so an open tab knows when it's behind (PL-014). */
+  | { type: 'resync'; snapshot: Snapshot; build?: string }
+  | { type: 'events'; events: { event: BoardEvent; item: Item }[]; seq: number; build?: string };
 
 export interface MyWorkBoard {
   board: BoardInfo;

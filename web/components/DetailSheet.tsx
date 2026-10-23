@@ -374,7 +374,8 @@ function Body({ item, client, readOnly }: { item: Item; client: BoardClient; rea
     );
   }
   return (
-    <div className="body-edit">
+    // Only a changed draft holds off a reload for a new build (PL-014); an untouched editor doesn't.
+    <div className="body-edit" data-dirty={draft !== item.body || !!conflict || undefined}>
       {conflict && (
         <div className="conflict">
           <div>{conflict.message}</div>
@@ -387,6 +388,7 @@ function Body({ item, client, readOnly }: { item: Item; client: BoardClient; rea
       )}
       <textarea
         autoFocus
+        data-not-draft
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onKeyDown={e => {
