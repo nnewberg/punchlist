@@ -13,7 +13,7 @@ punch list --compact   # the board for this repo, found from `origin`
 |---|---|
 | `list [--compact] [--status s] [--mine] [--all]` | the board; `--compact` is the agent view |
 | `show ID` | one item, with notes and history |
-| `add "title" [-b body] [-s status] [-t tag] [--deferred]` | add an item; `--deferred` marks work Claude left for later |
+| `add "title" [-b body \| --body-file path] [-s status] [-t tag] [--deferred]` | add an item (`--body-file -` reads stdin); `--deferred` marks work Claude left for later |
 | `edit ID [--title "title"] [-b body \| --body-file path]` | retitle it or replace its description (`--body-file -` reads stdin). If someone changed the description since you read it, nothing is saved and you're told who |
 | `search "words"` | the closest items, including Done in the last 30 days (the duplicate check) |
 | `move ID status [--top \| --before ID]` | move it |
@@ -32,7 +32,7 @@ punch list --compact   # the board for this repo, found from `origin`
 | `logout` / `whoami` | |
 | `hook session-start \| heartbeat \| session-end` | run by the Claude Code plugin's hooks |
 
-- Every command takes `--json`, and `--board owner/repo` to work outside a clone.
+- Every command takes `--json`, and `--board owner/repo` to work outside a clone. Any other flag a command doesn't use is an error (exit 2), not silently ignored.
 - IDs can be typed loosely: `bt-30` is `BT-030`.
 - **Agents:** set `PUNCH_SESSION=<id>` (or pass `--session`), and changes are recorded as that Claude session. The Claude Code plugin does this for you. A claim made in a session lasts while the session's hooks keep sending heartbeats, and lapses 2 hours after the last one.
 - **Offline:** reads use the last copy of the board, and changes wait in an outbox until the next command can send them.

@@ -10,11 +10,11 @@ import { ApiError, boardPath, Client, flush, NetworkError, readBoard, write, typ
 import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
 import { c, formatCompact, formatImportPlan, formatList, formatMine, formatShow } from './format';
 import { assignedElse, assignOp } from './assign';
-import { bodyFromFile, editOp } from './edit';
+import { bodyArg, editOp } from './edit';
 import { applyInit, planInit, pluginSettings } from './init';
 import { readHookInput, runHook } from './hooks';
 import { searchItems } from './search';
-import { parseStatus, UsageError } from './args';
+import { checkFlags, parseStatus, UsageError } from './args';
 import { boardFromCwd, parseBoardArg, repoRoot, type BoardRef } from './repo';
 
 declare const __PUNCH_VERSION__: string | undefined;
@@ -26,7 +26,7 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
 
   list [--compact] [--status s] [--mine] [--all]   the board (--compact: the agent view)
   show ID                       one item, with notes and history
-  add "title" [-b body] [-s status] [-t tag]... [--deferred]   add an item (default: Backlog)
+  add "title" [-b body | --body-file path] [-s status] [-t tag]... [--deferred]   add an item (default: Backlog)
   edit ID [--title "title"] [-b body | --body-file path]       retitle it or replace its description (--body-file -: stdin)
   search "words"                the closest items, Done ones from the last 30 days too
   move ID status [--top | --before ID]             move it (backlog, next, progress, done)
@@ -56,6 +56,8 @@ const { values: o, positionals } = (() => {
     return parseArgs({
       args: process.argv.slice(2),
       allowPositionals: true,
+      // Every command parses all of these. A new one also goes in COMMAND_FLAGS (args.ts) for the
+      // commands that read it; the others refuse it.
       options: {
         json: { type: 'boolean' },
         board: { type: 'string' },
@@ -227,6 +229,7 @@ async function signedIn(token: string, user: string): Promise<string> {
 async function run() {
   if (o.version) return print(VERSION);
   if (!cmd || o.help || cmd === 'help') return print(USAGE);
+  checkFlags(cmd, o);
 
   switch (cmd) {
     case 'login': {
@@ -291,16 +294,18 @@ async function run() {
       const title = need(args.join(' '), 'a title');
       const status = o.status ? parseStatus(o.status) : 'backlog';
       if (status === 'dropped') throw new UsageError('New items can’t start deleted.');
-      const op: Op = { op: 'create', title, status: status as Column, ...(o.body ? { body: o.body } : {}), ...(o.tag?.length ? { tags: o.tag } : {}), ...(o.deferred ? { source: 'claude-deferred' as const } : {}) };
+      const file = o['body-file'];
+      const body = bodyArg(o.body, file);
+      // An empty file here is a broken heredoc or the wrong path, not a wish for no description.
+      if (file !== undefined && !body) throw new UsageError(`${file === '-' ? 'stdin' : file} is empty. Leave out --body-file to add the item with no description.`);
+      const op: Op = { op: 'create', title, status: status as Column, ...(body ? { body } : {}), ...(o.tag?.length ? { tags: o.tag } : {}), ...(o.deferred ? { source: 'claude-deferred' as const } : {}) };
       return change(`add "${title}"`, [op], said('Added'));
     }
 
     case 'edit': {
       const ref = need(args[0], 'an item ID');
       if (args.length > 1) throw new UsageError('Put the new text in --title or --body, for example: punch edit BT-014 --title "Rate-limit the invite endpoint"');
-      const file = o['body-file'];
-      if (file !== undefined && o.body !== undefined) throw new UsageError('Use --body or --body-file, not both.');
-      const body = file !== undefined ? bodyFromFile(readFileSync(file === '-' ? 0 : file, 'utf8')) : o.body;
+      const body = bodyArg(o.body, o['body-file']);
       if (o.title === undefined && body === undefined) throw new UsageError('Nothing to change: give --title, --body or --body-file.');
       const b = board();
       const api = await client();
