@@ -30,7 +30,12 @@ Add an item when the user asks ("add X to the todo list", "put that on the punch
 2. If a match is the same piece of work, don't add. Record the request as a note on it instead, so the board shows it came up again, with whatever it adds: who asked, why, how urgent, new detail. For example: `punch note ID "Asked again: invites are getting hammered"`. Then tell the user which item already covers it. That includes a recent Done item, if the work has come back.
    - A similar topic isn't enough. "Rate-limit the invite endpoint" and "rate-limit the login endpoint" are two items, and so is the same fix for a different service, screen or scope.
    - When you're unsure, add the new item and mention the similar one ("Added PS-41; PS-16 looks related").
-3. Otherwise run `punch add "<short imperative title>"`. Use `-b "<details>"` for context worth keeping, and `-s next` only if the user says it's next.
+3. Otherwise run `punch add "<short imperative title>"`. Use `-b "<details>"` for context worth keeping, and `-s next` only if the user says it's next. For a description longer than a line, pass it on stdin instead of `-b`:
+   ```sh
+   punch add "<title>" --body-file - <<'EOF'
+   <the description>
+   EOF
+   ```
 
 Write titles the way a teammate would scan them: "Rate-limit the invite endpoint", not "the thing Nick mentioned".
 
@@ -48,6 +53,8 @@ File it like this:
 ```sh
 punch add --deferred "Retry failed uploads with backoff" -b "Left from <what you were doing>: <why>"
 ```
+
+A longer description goes on stdin, with `--body-file -` and a heredoc, as above.
 
 Run `punch search` first, as above. Then tell the user in one line, for example: "Filed PS-041 for the retry logic."
 
