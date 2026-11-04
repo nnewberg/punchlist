@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { Item, Op } from '../shared/types';
 import { UsageError } from './args';
 
@@ -26,3 +27,9 @@ export function editOp(it: Item, input: EditInput): EditOp | null {
 
 /** Text read from a file for a body: the file's trailing newline isn't part of it. */
 export const bodyFromFile = (text: string) => text.replace(/\s+$/, '');
+
+/** The body from --body or --body-file (`-` is stdin), for `add` and `edit`; undefined when neither is given. */
+export function bodyArg(body: string | undefined, file: string | undefined, read: (file: string) => string = f => readFileSync(f === '-' ? 0 : f, 'utf8')): string | undefined {
+  if (file !== undefined && body !== undefined) throw new UsageError('Use --body or --body-file, not both.');
+  return file !== undefined ? bodyFromFile(read(file)) : body;
+}
