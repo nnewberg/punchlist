@@ -2,7 +2,7 @@ import { BUILD_ID } from '../shared/build';
 import type { Actor, ImportFile, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
 import { BoardDO, refuseClientOp } from './board';
-import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
+import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, markOpened, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
 import { githubConfigured, verifyWebhook } from './github';
 import { resolveUser, type Identity } from './identity';
 import { listTokens, revokeToken } from './tokens';
@@ -104,6 +104,8 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
     if (rest[0] === 'ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return json({ error: 'expected websocket' }, 426);
       if (!trusted) return json({ error: 'forbidden' }, 403);
+      // Only the web app opens the live socket, so this is someone looking at the board (PL-019).
+      ctx.waitUntil(markOpened(env, user, board));
       const headers = new Headers(request.headers);
       headers.set('X-Punch-Board', JSON.stringify(info));
       headers.set('X-Punch-User', user.login);

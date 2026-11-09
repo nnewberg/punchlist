@@ -204,11 +204,26 @@ export async function roleFor(env: Env, user: User, board: Board, known?: { role
   return role;
 }
 
-/** Boards this person can see, with their role on each. */
+/**
+ * Boards this person can see, with their role on each: the ones they most recently opened in the web
+ * app first (PL-019), then the rest in owner/repo order.
+ */
 export async function boardsFor(env: Env, user: User): Promise<(Board & { role: Exclude<Role, 'none'> })[]> {
-  const boards = await listBoards(env);
+  const [boards, { results }] = await Promise.all([
+    listBoards(env),
+    env.DB.prepare(`SELECT repo_id, opened_at FROM access WHERE user_id = ? AND opened_at IS NOT NULL`).bind(user.id).all<{ repo_id: number; opened_at: string }>(),
+  ]);
   const roles = await Promise.all(boards.map(b => roleFor(env, user, b)));
-  return boards.flatMap((b, i) => (roles[i] === 'none' ? [] : [{ ...b, role: roles[i] as Exclude<Role, 'none'> }]));
+  const opened = new Map(results.map(r => [r.repo_id, r.opened_at]));
+  const at = (b: Board) => opened.get(b.repoId) ?? '';
+  return boards
+    .flatMap((b, i) => (roles[i] === 'none' ? [] : [{ ...b, role: roles[i] as Exclude<Role, 'none'> }]))
+    .sort((a, b) => (at(a) === at(b) ? 0 : at(a) > at(b) ? -1 : 1));
+}
+
+/** Notes that this person opened the board in the web app, which orders their board list (PL-019). */
+export async function markOpened(env: Env, user: User, board: Board) {
+  await env.DB.prepare(`UPDATE access SET opened_at = ? WHERE user_id = ? AND repo_id = ?`).bind(nowIso(), user.id, board.repoId).run();
 }
 
 /**

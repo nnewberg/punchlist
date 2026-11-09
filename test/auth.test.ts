@@ -157,6 +157,32 @@ describe('access follows GitHub (FR-2)', () => {
     expect(((await ok.json()) as { item: { claim: { user: string } } }).item.claim.user).toBe('aaron-t');
   });
 
+  it('lists the boards you last opened in the web app first, and the CLI doesn’t reorder them (PL-019)', async () => {
+    await seedBoards();
+    const cookie = await signedIn();
+    gh.perms = { 'big-talk:aaron-t': 'read', 'bulletin-bee:aaron-t': 'write' };
+    const order = async () => ((await (await call('/v1/me', { cookie })).json()) as Me).boards.map(b => b.repo);
+    const open = async (path: string) => {
+      const res = await call(`/v1/boards/${path}/ws`, { cookie, headers: { Upgrade: 'websocket', origin: ORIGIN } });
+      expect(res.status).toBe(101);
+      res.webSocket!.accept();
+      res.webSocket!.close();
+    };
+    expect(await order()).toEqual(['big-talk', 'bulletin-bee']); // never opened: owner/repo order
+
+    await open('nnewberg/bulletin-bee');
+    expect(await order()).toEqual(['bulletin-bee', 'big-talk']);
+
+    // Reading and changing a board as the CLI does isn't opening it.
+    await env.DB.prepare(`UPDATE access SET opened_at = '2026-01-01T00:00:00.000Z' WHERE user_id = 9 AND opened_at IS NOT NULL`).run(); // so the next open is plainly later
+    await call('/v1/boards/futureleisurefoundation/big-talk', { cookie, headers: { 'X-Punch-Via': 'cli' } });
+    await call('/v1/boards/nnewberg/bulletin-bee/ops', { method: 'POST', body: JSON.stringify({ op: 'create', title: 'from the cli' }), cookie, headers: { origin: ORIGIN, 'X-Punch-Via': 'cli' } });
+    expect(await order()).toEqual(['bulletin-bee', 'big-talk']);
+
+    await open('futureleisurefoundation/big-talk'); // a viewer's open counts too
+    expect(await order()).toEqual(['big-talk', 'bulletin-bee']);
+  });
+
   it('a viewer’s live connection cannot send changes either', async () => {
     const stub = env.BOARD.get(env.BOARD.idFromName(`repo:${crypto.randomUUID()}`));
     const res = await stub.fetch(new Request('https://x/ws', {
