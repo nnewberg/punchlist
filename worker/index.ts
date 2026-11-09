@@ -104,13 +104,19 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
     if (rest[0] === 'ws') {
       if (request.headers.get('Upgrade') !== 'websocket') return json({ error: 'expected websocket' }, 426);
       if (!trusted) return json({ error: 'forbidden' }, 403);
-      // Only the web app opens the live socket, so this is someone looking at the board (PL-019).
-      ctx.waitUntil(markOpened(env, user, board));
       const headers = new Headers(request.headers);
       headers.set('X-Punch-Board', JSON.stringify(info));
       headers.set('X-Punch-User', user.login);
       headers.set('X-Punch-Role', role);
       return stub.fetch(new Request(request.url, { headers }));
+    }
+
+    // POST /opened: the web app has this board on screen, which orders this person's boards (PL-019).
+    // Browser sessions only: what the CLI and Claude do with a board isn't looking at it.
+    if (rest[0] === 'opened' && rest.length === 1 && request.method === 'POST') {
+      if (!trusted || who.tokenId) return json({ error: 'forbidden' }, 403);
+      await markOpened(env, user, board);
+      return new Response(null, { status: 204 });
     }
 
     // POST an op, or an array of ops applied in order that stops at the first one refused.

@@ -5,6 +5,7 @@ import { isRecentDone, matchesQuery } from '../shared/derive';
 import { shortSha } from '../shared/github';
 import { columnItems } from '../shared/ops';
 import type { BoardEntry, Column as ColumnKey, Status } from '../shared/types';
+import { noteOpened } from './api';
 import { useBoard, type RemoteChange } from './boardClient';
 import { Card } from './components/Card';
 import { DetailSheet } from './components/DetailSheet';
@@ -49,6 +50,16 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardEntry[] }) 
   const [arrived, setArrived] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<ToastData | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // Opening a board means having it on screen (PL-019): a tab loaded or reconnected in the
+  // background doesn't count until someone switches to it.
+  useEffect(() => {
+    if (!board) return;
+    const seen = () => document.visibilityState === 'visible' && noteOpened(board);
+    seen();
+    document.addEventListener('visibilitychange', seen);
+    return () => document.removeEventListener('visibilitychange', seen);
+  }, [board]);
 
   useEffect(() => {
     setShowOlder(false);

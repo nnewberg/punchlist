@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { Me } from '../shared/types';
 import { prefixFor, ROLE_FRESH_MS } from '../worker/directory';
 import { clearMemo } from '../worker/memo';
-import { call, gh, INSTALL, ORIGIN, seedBoards, signedIn, useProdWorker, webhook, WEBHOOK_SECRET } from './harness';
+import { mintToken } from '../worker/tokens';
+import { call, gh, INSTALL, ORIGIN, prod, seedBoards, signedIn, useProdWorker, webhook, WEBHOOK_SECRET } from './harness';
 
 // Sign-in, sessions, access and the App webhook, run against the Worker as production would: no dev
 // stub, and a fake GitHub behind `fetch`.
@@ -162,24 +163,27 @@ describe('access follows GitHub (FR-2)', () => {
     const cookie = await signedIn();
     gh.perms = { 'big-talk:aaron-t': 'read', 'bulletin-bee:aaron-t': 'write' };
     const order = async () => ((await (await call('/v1/me', { cookie })).json()) as Me).boards.map(b => b.repo);
-    const open = async (path: string) => {
-      const res = await call(`/v1/boards/${path}/ws`, { cookie, headers: { Upgrade: 'websocket', origin: ORIGIN } });
-      expect(res.status).toBe(101);
-      res.webSocket!.accept();
-      res.webSocket!.close();
-    };
+    const open = (path: string, auth: { cookie?: string; token?: string } = { cookie }) =>
+      call(`/v1/boards/${path}/opened`, { method: 'POST', ...auth, headers: { origin: ORIGIN } });
     expect(await order()).toEqual(['big-talk', 'bulletin-bee']); // never opened: owner/repo order
 
-    await open('nnewberg/bulletin-bee');
+    expect((await open('nnewberg/bulletin-bee')).status).toBe(204);
     expect(await order()).toEqual(['bulletin-bee', 'big-talk']);
 
-    // Reading and changing a board as the CLI does isn't opening it.
+    // What the CLI and Claude do isn't opening a board: reads, changes, and the live socket.
     await env.DB.prepare(`UPDATE access SET opened_at = '2026-01-01T00:00:00.000Z' WHERE user_id = 9 AND opened_at IS NOT NULL`).run(); // so the next open is plainly later
-    await call('/v1/boards/futureleisurefoundation/big-talk', { cookie, headers: { 'X-Punch-Via': 'cli' } });
-    await call('/v1/boards/nnewberg/bulletin-bee/ops', { method: 'POST', body: JSON.stringify({ op: 'create', title: 'from the cli' }), cookie, headers: { origin: ORIGIN, 'X-Punch-Via': 'cli' } });
+    const token = await mintToken(prod, 9, 'nick-mbp');
+    await call('/v1/boards/futureleisurefoundation/big-talk', { token });
+    await call('/v1/boards/nnewberg/bulletin-bee/ops', { method: 'POST', body: JSON.stringify({ op: 'create', title: 'from the cli' }), token });
+    const ws = await call('/v1/boards/futureleisurefoundation/big-talk/ws', { cookie, headers: { Upgrade: 'websocket', origin: ORIGIN } });
+    expect(ws.status).toBe(101);
+    ws.webSocket!.accept();
+    ws.webSocket!.close();
+    expect((await open('futureleisurefoundation/big-talk', { token })).status).toBe(403);
+    expect((await call('/v1/boards/futureleisurefoundation/big-talk/opened', { method: 'POST', cookie, headers: { origin: 'https://evil.example' } })).status).toBe(403);
     expect(await order()).toEqual(['bulletin-bee', 'big-talk']);
 
-    await open('futureleisurefoundation/big-talk'); // a viewer's open counts too
+    expect((await open('futureleisurefoundation/big-talk')).status).toBe(204); // a viewer's open counts too
     expect(await order()).toEqual(['big-talk', 'bulletin-bee']);
   });
 

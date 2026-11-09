@@ -243,7 +243,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
   - Conflicts are resolved under FR-8 and reported to the user.
 
 ### 7.3 Web board
-- **FR-10 Board page.** Each board lives at `/<owner>/<repo>`, with a switcher between boards and a "My work" view (FR-35). `/` opens the board you last opened in the web app, and the switcher lists boards most recently opened first; CLI and Claude activity don't count.
+- **FR-10 Board page.** Each board lives at `/<owner>/<repo>`, with a switcher between boards and a "My work" view (FR-35). `/` opens the board you last had on screen in the web app, and the switcher lists boards most recently opened first. A tab in the background doesn't count until you switch to it, and neither do CLI and Claude activity.
 - **FR-11 Drag and drop:**
   - Between columns, which changes the status. Dropping into In Progress claims the item for you.
   - Within a column, which changes the order.

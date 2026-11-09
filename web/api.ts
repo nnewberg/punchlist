@@ -49,6 +49,21 @@ export const setAccount = (m: Me) => {
 };
 export const account = () => current;
 
+// The board last on screen in this tab, and when the server was last told (PL-019).
+let opened: { path: string; at: number } | null = null;
+const OPENED_EVERY_MS = 60_000;
+
+/** Where `/` goes: the board last on screen here, else the one this person opened most recently anywhere. */
+export const homePath = () => opened?.path ?? (current?.boards[0] ? boardPath(current.boards[0]) : '/');
+
+/** This board is on screen: remember it for `/`, and tell the server, at most once a minute per board. */
+export function noteOpened(b: Pick<BoardInfo, 'owner' | 'repo'>) {
+  const path = boardPath(b);
+  if (opened?.path === path && Date.now() - opened.at < OPENED_EVERY_MS) return;
+  opened = { path, at: Date.now() };
+  api(`${boardApi(b)}/opened`, { method: 'POST' }).catch(() => {});
+}
+
 /** Whether this browser has signed in before (set by the server at sign-in; holds nothing secret). */
 export const knownBrowser = () => document.cookie.split(';').some(c => c.trim() === 'pl_known=1');
 
