@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { setPeople } from '../shared/config';
-import { api, ApiError, boardPath, knownBrowser, setAccount, signInUrl, type Me } from './api';
+import { api, ApiError, homePath, knownBrowser, setAccount, signInUrl, type Me } from './api';
 import { BoardPage } from './BoardPage';
 import { MyWorkPage, StatesPage } from './GroupsPage';
 import { Header } from './components/Header';
@@ -21,6 +21,11 @@ function silentReauth(): boolean {
   }
   location.replace(signInUrl());
   return true;
+}
+
+// `/` reopens the board you were last on (PL-019), read when you arrive rather than at page load.
+function Home() {
+  return <Navigate to={homePath()} replace />;
 }
 
 export function App() {
@@ -48,7 +53,7 @@ export function App() {
           <Route path="*" element={<div className="app"><Header title="" boards={[]} me={me.user} query="" onQuery={() => {}} /><NoBoards installUrl={me.installUrl} /></div>} />
         ) : (
           <>
-            <Route path="/" element={<Navigate to={boardPath(me.boards[0]!)} replace />} />
+            <Route path="/" element={<Home />} />
             <Route path="/signin" element={<Navigate to="/" replace />} />
             <Route path="/me" element={<MyWorkPage me={me.user} boards={me.boards} />} />
             {me.dev && <Route path="/_states" element={<StatesPage me={me.user} boards={me.boards} />} />}

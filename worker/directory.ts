@@ -204,11 +204,28 @@ export async function roleFor(env: Env, user: User, board: Board, known?: { role
   return role;
 }
 
-/** Boards this person can see, with their role on each. */
+/**
+ * Boards this person can see, with their role on each: the ones they most recently opened in the web
+ * app first (PL-019), then the rest in owner/repo order.
+ */
 export async function boardsFor(env: Env, user: User): Promise<(Board & { role: Exclude<Role, 'none'> })[]> {
-  const boards = await listBoards(env);
-  const roles = await Promise.all(boards.map(b => roleFor(env, user, b)));
-  return boards.flatMap((b, i) => (roles[i] === 'none' ? [] : [{ ...b, role: roles[i] as Exclude<Role, 'none'> }]));
+  // One read of this person's access rows serves both the role checks and the order.
+  const [boards, { results }] = await Promise.all([
+    listBoards(env),
+    env.DB.prepare(`SELECT repo_id, role, checked_at, opened_at FROM access WHERE user_id = ?`).bind(user.id).all<{ repo_id: number; role: Role; checked_at: string; opened_at: string | null }>(),
+  ]);
+  const rows = new Map(results.map(r => [r.repo_id, r]));
+  const roles = await Promise.all(boards.map(b => roleFor(env, user, b, rows.get(b.repoId) ?? null)));
+  const opened = (b: Board) => rows.get(b.repoId)?.opened_at ?? '';
+  // Newest first; the sort is stable, so boards never opened keep owner/repo order.
+  return boards
+    .flatMap((b, i) => (roles[i] === 'none' ? [] : [{ ...b, role: roles[i] as Exclude<Role, 'none'> }]))
+    .sort((a, b) => (opened(a) < opened(b) ? 1 : opened(a) > opened(b) ? -1 : 0));
+}
+
+/** Notes that this person opened the board in the web app, which orders their board list (PL-019). */
+export async function markOpened(env: Env, user: User, board: Board) {
+  await env.DB.prepare(`UPDATE access SET opened_at = ? WHERE user_id = ? AND repo_id = ?`).bind(nowIso(), user.id, board.repoId).run();
 }
 
 /**

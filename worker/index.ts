@@ -2,7 +2,7 @@ import { BUILD_ID } from '../shared/build';
 import type { Actor, ImportFile, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
 import { BoardDO, refuseClientOp } from './board';
-import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
+import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, markOpened, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
 import { githubConfigured, verifyWebhook } from './github';
 import { resolveUser, type Identity } from './identity';
 import { listTokens, revokeToken } from './tokens';
@@ -109,6 +109,14 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
       headers.set('X-Punch-User', user.login);
       headers.set('X-Punch-Role', role);
       return stub.fetch(new Request(request.url, { headers }));
+    }
+
+    // POST /opened: the web app has this board on screen, which orders this person's boards (PL-019).
+    // Browser sessions only: what the CLI and Claude do with a board isn't looking at it.
+    if (rest[0] === 'opened' && rest.length === 1 && request.method === 'POST') {
+      if (!trusted || who.tokenId) return json({ error: 'forbidden' }, 403);
+      await markOpened(env, user, board);
+      return new Response(null, { status: 204 });
     }
 
     // POST an op, or an array of ops applied in order that stops at the first one refused.
