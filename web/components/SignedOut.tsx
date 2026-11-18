@@ -1,4 +1,5 @@
 import { signInUrl, signOut } from '../api';
+import { SetupPrompt } from './SetupPrompt';
 import { Logo } from './ui';
 
 export const GitHubMark = ({ size = 16 }: { size?: number }) => (
@@ -27,6 +28,22 @@ export function SignedOut() {
   );
 }
 
+/** Setting up Claude Code for a repo (PL-020). GitHub's post-install redirect lands here with ?installed=1. */
+export function SetupPage() {
+  const installed = new URLSearchParams(location.search).has('installed');
+  return (
+    <div className="signedout setup-page">
+      <div className="mark">
+        <Logo size="lg" />
+        <div className="name">Set up Claude Code</div>
+      </div>
+      {installed && <div className="setup-done">The Punchlist GitHub App is installed, so the repos you picked have boards.</div>}
+      <SetupPrompt />
+      <a className="btn-link" href="/">Go to your boards</a>
+    </div>
+  );
+}
+
 /** Signed in, but no board yet: none of your repos has the GitHub App installed. */
 export function NoBoards({ installUrl }: { installUrl: string | null }) {
   return (
@@ -44,6 +61,7 @@ export function NoBoards({ installUrl }: { installUrl: string | null }) {
           Add a repo
         </a>
       )}
+      <SetupPrompt lead="Or have Claude do it: open the repo in Claude Code and paste this. It says what's missing, including the App." />
       <button className="btn-link" onClick={() => void signOut()}>Sign out</button>
     </div>
   );

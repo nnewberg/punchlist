@@ -2,7 +2,7 @@ import { BUILD_ID } from '../shared/build';
 import type { Actor, ImportFile, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
 import { BoardDO, refuseClientOp } from './board';
-import { boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, markOpened, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
+import { allowedOwners, boardForUser, boardInfo, boardsFor, ensureDevSeed, handleWebhook, markOpened, peopleOn, reconcile, reconcileSoon, type Board, type User } from './directory';
 import { githubConfigured, verifyWebhook } from './github';
 import { resolveUser, type Identity } from './identity';
 import { listTokens, revokeToken } from './tokens';
@@ -67,6 +67,7 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
       boards: boards.map(b => ({ ...boardInfo(b), role: b.role, editors: b.role === 'edit' ? (editors[b.repoId] ?? []) : [] })),
       people,
       installUrl: installUrl(env),
+      allowedOwners: allowedOwners(env),
       dev: env.DEV_MODE === '1',
     } satisfies Me);
   }
@@ -226,13 +227,13 @@ async function github(request: Request, env: Env, url: URL): Promise<Response> {
   }
 
   // GitHub sends the installer here after they pick repos; sync that installation so its boards are
-  // there when they land, even if the webhook is slow.
+  // there when they land, even if the webhook is slow. Then show the prompt that sets up Claude Code.
   if (url.pathname === '/github/setup' && request.method === 'GET') {
     const id = Number(url.searchParams.get('installation_id'));
     if (githubConfigured(env) && Number.isInteger(id) && id > 0) {
       await reconcile(env, id).catch(e => console.error('setup sync failed', e));
     }
-    return new Response(null, { status: 302, headers: { location: '/' } });
+    return new Response(null, { status: 302, headers: { location: '/setup?installed=1' } });
   }
 
   return notFound();

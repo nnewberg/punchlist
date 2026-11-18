@@ -5,7 +5,7 @@ import { api, ApiError, homePath, knownBrowser, setAccount, signInUrl, type Me }
 import { BoardPage } from './BoardPage';
 import { MyWorkPage, StatesPage } from './GroupsPage';
 import { Header } from './components/Header';
-import { NoBoards, SignedOut } from './components/SignedOut';
+import { NoBoards, SetupPage, SignedOut } from './components/SignedOut';
 
 // A browser that has signed in before goes back through GitHub on its own when the session runs out
 // (FR-3a), since GitHub remembers the approval. Once per minute at most, so a failing sign-in shows
@@ -49,6 +49,7 @@ export function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/setup" element={<div className="app"><Header title="" boards={me.boards} me={me.user} query="" onQuery={() => {}} /><SetupPage /></div>} />
         {me.boards.length === 0 ? (
           <Route path="*" element={<div className="app"><Header title="" boards={[]} me={me.user} query="" onQuery={() => {}} /><NoBoards installUrl={me.installUrl} /></div>} />
         ) : (

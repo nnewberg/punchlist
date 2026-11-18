@@ -8,23 +8,20 @@ Claude keeps your repo's shared [Punchlist](https://punchlist.nnewberg.workers.d
 
 ## Install
 
-**In a repo that already offers it**, open the repo in Claude Code and trust the folder; the plugin turns on by itself. Then run `/punch login` once per machine.
+**To set up a repo**, open it in Claude Code and paste this:
 
-**To offer it in a repo**, commit this to the repo's `.claude/settings.json` (`punch init` prints it too):
-
-```json
-{
-  "extraKnownMarketplaces": {
-    "punchlist": { "source": { "source": "github", "repo": "nnewberg/punchlist" }, "autoUpdate": true }
-  },
-  "enabledPlugins": { "punchlist@punchlist": true }
-}
+```text
+Set up Punchlist for this repo. Run `claude plugin install punchlist --marketplace nnewberg/punchlist --scope project`. Then run `claude plugin list --json`, take the installPath of the punchlist@punchlist entry for this repo, and run `<installPath>/bin/punch setup`. Do the one next step it prints, then run it again, until it says "Setup complete". Ask me before committing anything.
 ```
 
-**To install it for yourself**, run `/plugin install punchlist --marketplace nnewberg/punchlist`.
+`punch setup` signs you in, gets the repo a board, turns the plugin on in `.claude/settings.json`, adds the CLAUDE.md pointer, and offers a PR. `/punch setup` runs it again any time, and `punch setup --check` is the health check.
+
+**In a repo that already offers it**, pull main and open the repo in Claude Code. Approve the plugin when it asks, and sign in once when Claude offers.
+
+**To use `punch` in a terminal too**, run `punch setup --link`. It links the plugin's own `punch` into `~/.local/bin`, so the terminal runs the same version.
 
 Requirements:
-- Node.js 20 or later. The plugin installs the `punch` CLI it needs into its own data folder the first time it runs.
+- Node.js 20 or later, anywhere on the machine. The plugin finds it itself (on PATH, or from nvm, fnm, Volta, asdf or Homebrew) and installs the `punch` CLI it needs into its own data folder the first time it runs.
 - The repo needs the Punchlist Board GitHub App installed, which is what gives it a board.
 
 ## What's in it

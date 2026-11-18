@@ -20,13 +20,22 @@ A shared, live TODO board for each repo that keeps itself up to date. See [PRD.m
 
 ## Using it with Claude Code
 
-Install it in Claude Code:
+**To set up a repo**, open it in Claude Code and paste this. The web board shows it too, with a Copy button (account menu → Set up Claude Code).
 
-```
-/plugin install punchlist --marketplace nnewberg/punchlist
+```text
+Set up Punchlist for this repo. Run `claude plugin install punchlist --marketplace nnewberg/punchlist --scope project`. Then run `claude plugin list --json`, take the installPath of the punchlist@punchlist entry for this repo, and run `<installPath>/bin/punch setup`. Do the one next step it prints, then run it again, until it says "Setup complete". Ask me before committing anything.
 ```
 
-To offer the plugin to everyone who opens a repo, commit this to the repo's `.claude/settings.json`. `punch init` prints it too.
+`punch setup` then works through each step:
+- signs you in
+- links you to install the GitHub App, then waits for the board
+- turns the plugin on in `.claude/settings.json`
+- adds the CLAUDE.md pointer
+- offers a PR
+
+It never commits without asking. `punch setup --check` reports without changing anything.
+
+**Everyone else** gets it by pulling main. The committed `.claude/settings.json` makes Claude Code offer them the plugin when they open the repo. They approve it once and sign in once per machine; Claude offers the sign-in in their first session.
 
 ```json
 {
@@ -37,7 +46,7 @@ To offer the plugin to everyone who opens a repo, commit this to the repo's `.cl
 }
 ```
 
-Then each person runs `/punch login` once. Claims a Claude session makes are released when it ends, and lapse after 2 hours without activity if it dies.
+Claims a Claude session makes are released when it ends, and lapse after 2 hours without activity if it dies.
 
 ## How GitHub keeps the board current
 

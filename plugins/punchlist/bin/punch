@@ -1,44 +1,116 @@
 #!/bin/sh
 # The plugin's `punch`: runs the version of the CLI (@nnewberg/punchlist) this plugin was built for,
-# installing it into the plugin's data folder the first time. Claude Code runs it from the hooks, and
-# the SessionStart hook puts this folder first on the PATH of Claude's shell, with PUNCH_PLUGIN_DATA.
+# installing it the first time. Claude Code runs it from the hooks, and the SessionStart hook puts this
+# folder first on the PATH of Claude's shell, with PUNCH_PLUGIN_DATA. `punch setup --link` links it
+# into ~/.local/bin, so a terminal runs the same version.
+#
+# It finds a Node.js 20+ itself (PL-020): the `node` on PATH if it's new enough, otherwise the newest
+# one from nvm, fnm, Volta, asdf or Homebrew. Hooks and GUI-started apps often don't load the shell
+# profile that puts nvm's node on PATH, and the first node found can be too old. The choice is kept in
+# the data folder, so later runs don't look again.
+#
 # PUNCH_CLI points it at a CLI built from the punchlist repo instead, for development.
 set -e
 
 if [ -n "$PUNCH_CLI" ]; then exec node "$PUNCH_CLI" "$@"; fi
 
-root=$(cd "$(dirname "$0")/.." && pwd)
-want=$(cat "$root/cli-version")
-data=${CLAUDE_PLUGIN_DATA:-$PUNCH_PLUGIN_DATA}
-
-if [ -n "$data" ]; then
-  cli="$data/cli/node_modules/@nnewberg/punchlist"
-  have=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$cli/package.json" 2>/dev/null | head -n 1)
-  if [ "$have" != "$want" ]; then
-    if ! command -v npm >/dev/null 2>&1; then
-      echo "punch: the Punchlist plugin needs Node.js 20 or later, and npm wasn't found." >&2
-      exit 1
-    fi
-    mkdir -p "$data/cli"
-    # --prefer-online: a version published minutes ago isn't in npm's cached package list yet.
-    npm install --prefix "$data/cli" --no-save --no-audit --no-fund --loglevel=error --prefer-online "@nnewberg/punchlist@$want" >&2 || {
-      echo "punch: couldn't install @nnewberg/punchlist@$want." >&2
-      # Session start's output goes to Claude, so say why the board is missing instead of nothing.
-      if [ "$1 $2" = "hook session-start" ]; then
-        echo "Punchlist: the plugin couldn't install punch $want from npm, so the board isn't loaded this session. Tell the user once."
-        exit 0
-      fi
-      exit 1
-    }
-  fi
-  exec node "$cli/dist/punch.mjs" "$@"
-fi
-
-# Run outside Claude Code: use another punch on the PATH, if there is one.
-self="$root/bin/punch"
-IFS=:
-for dir in $PATH; do
-  if [ -x "$dir/punch" ] && [ "$(cd "$dir" && pwd)/punch" != "$self" ]; then exec "$dir/punch" "$@"; fi
+# This file, through any symlinks (~/.local/bin/punch points here).
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
 done
-echo "punch: not installed. Run: npm i -g @nnewberg/punchlist" >&2
-exit 1
+root=$(cd "$(dirname "$self")/.." && pwd -P)
+want=$(cat "$root/cli-version")
+
+# Inside Claude Code, the plugin's data folder. In a terminal, punch's own config folder.
+data=${CLAUDE_PLUGIN_DATA:-$PUNCH_PLUGIN_DATA}
+[ -n "$data" ] || data=${XDG_CONFIG_HOME:-$HOME/.config}/punchlist
+
+# Says what's wrong and how to fix it. At session start the output goes into Claude's context, so it's
+# a message for Claude and the session carries on; otherwise it's an error for the person.
+fail() {
+  if [ "$hook_start" = 1 ]; then
+    echo "Punchlist: the plugin $1, so the board isn't loaded this session. Tell the user once. $2"
+    exit 0
+  fi
+  echo "punch: $1." >&2
+  echo "$2" >&2
+  exit 1
+}
+hook_start=0
+if [ "$1 $2" = "hook session-start" ]; then hook_start=1; fi
+
+# ---- Finding Node.js 20+ ----
+
+best=
+best_major=0
+seen=
+
+try_node() {
+  [ -x "$1" ] || return 0
+  m=$("$1" -e 'process.stdout.write(process.versions.node.split(".")[0])' 2>/dev/null) || return 0
+  case $m in '' | *[!0-9]*) return 0 ;; esac
+  seen="$seen $1 (Node $m);"
+  if [ "$m" -ge 20 ] && [ "$m" -gt "$best_major" ]; then
+    best=$1
+    best_major=$m
+  fi
+}
+
+find_node() {
+  on_path=$(command -v node 2>/dev/null || true)
+  if [ -n "$on_path" ]; then
+    try_node "$on_path"
+    if [ -n "$best" ]; then return 0; fi
+  fi
+  for n in "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/node \
+    "$HOME/.local/share/fnm"/node-versions/*/installation/bin/node \
+    "$HOME/Library/Application Support/fnm"/node-versions/*/installation/bin/node \
+    "$HOME/.volta/bin/node" \
+    "$HOME/.asdf/shims/node"; do
+    try_node "$n"
+  done
+  # Fixed install places. PUNCH_SYSTEM_NODES replaces them, for tests.
+  for n in ${PUNCH_SYSTEM_NODES-/opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node}; do
+    try_node "$n"
+  done
+}
+
+node_bin=
+if [ -f "$data/node-path" ]; then
+  node_bin=$(cat "$data/node-path")
+  [ -x "$node_bin" ] || node_bin=
+fi
+if [ -z "$node_bin" ]; then
+  find_node
+  if [ -z "$best" ]; then
+    if [ -n "$seen" ]; then
+      fail "needs Node.js 20 or later" "It found only:$seen install a newer one with \`brew install node\` or \`nvm install 22\`, then try again."
+    fi
+    fail "needs Node.js 20 or later" "It couldn't find Node.js on this machine. Install it with \`brew install node\` (or from nodejs.org), then try again."
+  fi
+  node_bin=$best
+  mkdir -p "$data"
+  printf '%s\n' "$node_bin" >"$data/node-path"
+fi
+node_dir=$(dirname "$node_bin")
+
+# ---- Installing the pinned CLI ----
+
+cli="$data/cli/node_modules/@nnewberg/punchlist"
+have=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$cli/package.json" 2>/dev/null | head -n 1)
+if [ "$have" != "$want" ]; then
+  # That node's own npm, run with that node first on PATH (npm's `#!/usr/bin/env node` picks it).
+  npm_bin=$node_dir/npm
+  [ -x "$npm_bin" ] || npm_bin=$(command -v npm 2>/dev/null || true)
+  [ -n "$npm_bin" ] || fail "found Node.js at $node_bin but no npm beside it" "Reinstall Node.js with npm (\`brew install node\` or \`nvm install 22\`), then try again."
+  mkdir -p "$data/cli"
+  # --prefer-online: a version published minutes ago isn't in npm's cached package list yet.
+  PATH="$node_dir:$PATH" "$npm_bin" install --prefix "$data/cli" --no-save --no-audit --no-fund --loglevel=error --prefer-online "@nnewberg/punchlist@$want" >&2 ||
+    fail "couldn't install punch $want from npm" "Check the internet connection and try again; it installs by itself on the next run."
+fi
+exec "$node_bin" "$cli/dist/punch.mjs" "$@"

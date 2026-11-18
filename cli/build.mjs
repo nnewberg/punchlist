@@ -11,7 +11,7 @@ await build({
   bundle: true,
   platform: 'node',
   format: 'esm',
-  target: 'node22',
+  target: 'node20', // the oldest Node punch supports (package.json engines, and the plugin's launcher)
   external: ['@napi-rs/keyring'],
   banner: { js: '#!/usr/bin/env node' },
   define: { __PUNCH_VERSION__: JSON.stringify(pkg.version) },

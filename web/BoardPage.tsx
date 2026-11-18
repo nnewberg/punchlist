@@ -11,6 +11,7 @@ import { Card } from './components/Card';
 import { DetailSheet } from './components/DetailSheet';
 import { emptyFilters, FilterMenu, filterCount, Header, type Filters } from './components/Header';
 import { Toast, type ToastData } from './components/Toast';
+import { SetupPrompt } from './components/SetupPrompt';
 import { Glyph, PlusIcon } from './components/ui';
 import { DragFloat, Flip, useCardDrag, type Slot } from './drag';
 
@@ -155,7 +156,10 @@ export function BoardPage({ me, boards }: { me: string; boards: BoardEntry[] }) 
   if (missing || !board || !client) {
     return (
       <Shell me={me} boards={boards}>
-        <div className="signedout"><div style={{ color: 'var(--fg3)' }}>No board at {owner}/{repo}.</div></div>
+        <div className="signedout setup-page">
+          <div style={{ color: 'var(--fg3)' }}>No board at {owner}/{repo} that you can see.</div>
+          <SetupPrompt lead="If it should have one, open the repo in Claude Code and paste this. It says what's missing." />
+        </div>
       </Shell>
     );
   }

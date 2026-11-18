@@ -14,6 +14,7 @@ import { bodyArg, editOp } from './edit';
 import { applyInit, planInit, pluginSettings } from './init';
 import { readHookInput, runHook } from './hooks';
 import { searchItems } from './search';
+import { formatSetup, runSetup } from './setup';
 import { checkFlags, parseStatus, UsageError } from './args';
 import { boardFromCwd, parseBoardArg, repoRoot, type BoardRef } from './repo';
 
@@ -44,6 +45,8 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
   import FILE [--yes]           add items from an import file, after a dry run (PRD §7.9)
   login [--start | --finish]    sign in with GitHub (--start/--finish: in two steps, for Claude)
   logout / whoami
+  setup [--check] [--wait-board] [--link]   set up Punchlist for this repo and machine, and say what's next
+                                (--check: only report; --link: make punch work in a terminal too)
   init                          point this repo's CLAUDE.md at the board
   hook EVENT                    run by the Claude Code plugin: session-start, heartbeat, session-end
 
@@ -83,6 +86,9 @@ const { values: o, positionals } = (() => {
         deferred: { type: 'boolean' },
         start: { type: 'boolean' },
         finish: { type: 'boolean' },
+        check: { type: 'boolean' },
+        link: { type: 'boolean' },
+        'wait-board': { type: 'boolean' },
       },
     });
   } catch (e) {
@@ -460,7 +466,7 @@ async function run() {
       const root = repoRoot();
       if (!root) throw new UsageError('Run punch init inside the repo.');
       const plan = planInit(root, url, b);
-      if (plan.already) return print(`${plan.path} already points at the board.`);
+      if (plan.already) return print(`${plan.path} already points at the board. ${c.dim('`punch setup` checks everything else.')}`);
       print(`This adds ${plan.lines.length} lines to ${plan.exists ? '' : 'a new '}${plan.path}:\n`);
       print(plan.lines.map(l => c.dim(`  ${l}`)).join('\n'));
       if (!o.yes) {
@@ -473,6 +479,14 @@ async function run() {
       applyInit(plan);
       print(`Added the board pointer to ${plan.path}. Commit it when you're ready.`);
       return print(`\nTo offer teammates the Claude Code plugin when they open this repo, commit this to .claude/settings.json:\n${c.dim(pluginSettings())}`);
+    }
+
+    case 'setup': {
+      const report = await runSetup({ url, cwd: process.cwd(), version: VERSION, check: !!o.check, link: !!o.link, waitBoard: !!o['wait-board'] });
+      if (o.json) printJson(report);
+      else print(formatSetup(report));
+      if (o.check && !report.done) process.exitCode = 1;
+      return;
     }
 
     case 'hook': {
@@ -501,7 +515,7 @@ function exit(code: number) {
 }
 
 run().then(
-  () => exit(0),
+  () => exit(Number(process.exitCode ?? 0)),
   e => {
     if (o.json && !(e instanceof UsageError)) printJson({ ok: false, error: e instanceof ApiError ? (e.opError ?? { message: e.message }) : { message: (e as Error).message } });
     else info(c.red(`${(e as Error).message}${e instanceof NetworkError ? '.' : ''}`));

@@ -133,7 +133,7 @@ If the session start said punch isn't signed in, or a command says "Not signed i
 2. Tell the user a GitHub page just opened, and give them the code to enter there (and the URL, in case no page opened).
 3. Run `punch login --finish` with a Bash timeout of 10 minutes (600000 ms). It returns once they've approved.
 
-If a command says there's no board for the repo, the Punchlist Board GitHub App isn't installed on it, or the user lacks access. Tell them once, and don't keep trying.
+If a command says there's no board for the repo, the Punchlist Board GitHub App isn't installed on it, or the user lacks access. Tell them once, and don't keep trying. `/punch setup` says which, and what to do.
 
 ## Offline
 

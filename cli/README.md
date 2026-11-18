@@ -27,6 +27,7 @@ punch list --compact   # the board for this repo, found from `origin`
 | `open [ID]` | open the board in the browser |
 | `export [-o file]` | the board as JSON |
 | `import FILE [--yes]` | add items from an import file (Punchlist's item shape, IDs kept), after a dry run |
+| `setup [--check] [--wait-board] [--link]` | set Punchlist up for this repo and machine: sign-in, the board, `.claude/settings.json`, the plugin, the CLAUDE.md pointer. Each run fixes what it safely can and names the one next step; it never commits. `--check` only reports (the health check), `--wait-board` waits for the board after the GitHub App is installed, and `--link` puts the plugin's `punch` in `~/.local/bin` |
 | `init` | point this repo's CLAUDE.md at the board |
 | `login [--start \| --finish]` | sign in with GitHub; in two steps with `--start` and `--finish` (how Claude does it) |
 | `logout` / `whoami` | |

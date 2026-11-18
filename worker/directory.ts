@@ -50,8 +50,10 @@ export function prefixFor(repo: string): string {
   return prefix.toUpperCase();
 }
 
+export const allowedOwners = (env: Env): string[] => env.ALLOWED_OWNERS.split(',').map(s => s.trim()).filter(Boolean);
+
 export function allowedOwner(env: Env, owner: string): boolean {
-  return env.ALLOWED_OWNERS.split(',').map(s => s.trim().toLowerCase()).includes(owner.toLowerCase());
+  return allowedOwners(env).some(o => o.toLowerCase() === owner.toLowerCase());
 }
 
 // ---- Boards ----
