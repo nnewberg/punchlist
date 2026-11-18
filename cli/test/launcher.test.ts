@@ -26,6 +26,7 @@ echo "ran $0 $*" >> "${log}"
   // Its npm lays down a stub CLI package, and records which node was first on its PATH.
   const npm = join(dir, 'npm');
   writeFileSync(npm, `#!/bin/sh
+if [ -n "$FAKE_NPM_FAIL" ]; then printf '%s\\n' "$FAKE_NPM_FAIL" >&2; exit 1; fi
 prefix=; spec=
 while [ $# -gt 0 ]; do case $1 in --prefix) prefix=$2; shift ;; @nnewberg/*) spec=$1 ;; esac; shift; done
 v=\${spec##*@}
@@ -89,6 +90,21 @@ describe('the plugin launcher', () => {
     const r = run(['hook', 'session-start']);
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/^Punchlist: the plugin needs Node.js 20 or later, so the board isn't loaded this session\. Tell the user once\. It couldn't find Node\.js/);
+  });
+
+  it.each([
+    ['the version is not published yet', 'npm error code ETARGET\nnpm error notarget No matching version found for @nnewberg/punchlist@9.9.9.', /that version isn't on npm yet[\s\S]*npm publish/],
+    ['npm cannot reach the registry', 'npm error code ENOTFOUND\nnpm error network request to https://registry.npmjs.org failed', /npm couldn't reach the registry[\s\S]*internet connection/],
+    ['npm fails some other way', 'npm error code EACCES\nnpm error permission denied', /npm said: npm error code EACCES npm error permission denied/],
+  ])('says what went wrong when %s', (_why, npmSays, said) => {
+    fakeNode(join(home, '.nvm/versions/node/v22.0.0/bin'), 22);
+    const r = run(['list'], { FAKE_NPM_FAIL: npmSays });
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(said);
+    const hook = run(['hook', 'session-start'], { FAKE_NPM_FAIL: npmSays });
+    expect(hook.code).toBe(0);
+    expect(hook.out).toMatch(/^Punchlist: the plugin couldn't install punch .*, so the board isn't loaded this session\. Tell the user once\./);
+    expect(hook.out).toMatch(said);
   });
 
   it('remembers the node it chose, and installs only once', () => {

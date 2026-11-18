@@ -109,8 +109,18 @@ if [ "$have" != "$want" ]; then
   [ -x "$npm_bin" ] || npm_bin=$(command -v npm 2>/dev/null || true)
   [ -n "$npm_bin" ] || fail "found Node.js at $node_bin but no npm beside it" "Reinstall Node.js with npm (\`brew install node\` or \`nvm install 22\`), then try again."
   mkdir -p "$data/cli"
+  log="$data/npm-install.log"
   # --prefer-online: a version published minutes ago isn't in npm's cached package list yet.
-  PATH="$node_dir:$PATH" "$npm_bin" install --prefix "$data/cli" --no-save --no-audit --no-fund --loglevel=error --prefer-online "@nnewberg/punchlist@$want" >&2 ||
-    fail "couldn't install punch $want from npm" "Check the internet connection and try again; it installs by itself on the next run."
+  if ! PATH="$node_dir:$PATH" "$npm_bin" install --prefix "$data/cli" --no-save --no-audit --no-fund --loglevel=error --prefer-online "@nnewberg/punchlist@$want" >"$log" 2>&1; then
+    cat "$log" >&2
+    # Say what actually went wrong: the usual advice ("check the connection") sent people the wrong way.
+    if grep -q 'ETARGET\|No matching version' "$log"; then
+      fail "couldn't install punch $want: that version isn't on npm yet" "Publish it (\`cd cli && npm publish\` in the punchlist repo), or wait a minute if it was just published; it installs by itself on the next run."
+    elif grep -q 'ENOTFOUND\|EAI_AGAIN\|ETIMEDOUT\|ECONNREFUSED\|ECONNRESET\|ENETUNREACH' "$log"; then
+      fail "couldn't install punch $want: npm couldn't reach the registry" "Check the internet connection (or a proxy or VPN); it installs by itself on the next run."
+    else
+      fail "couldn't install punch $want from npm" "npm said: $(grep -i 'error' "$log" | tail -n 2 | tr '\n' ' ')(the whole output is in $log). It tries again by itself on the next run."
+    fi
+  fi
 fi
 exec "$node_bin" "$cli/dist/punch.mjs" "$@"
