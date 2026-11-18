@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { SETUP_INSTALL, setupPrompt } from '../../shared/setupPrompt';
-import { INSTALL_ARGS } from '../setup';
+import { SETUP_REFRESH, setupPrompt } from '../../shared/setupPrompt';
+import { REFRESH_ARGS } from '../setup';
 
 // The setup prompt in the READMEs is the one the code builds (PL-020), so the instructions people copy
 // can't drift from what works.
@@ -14,7 +14,7 @@ describe('the setup prompt', () => {
     expect(read(path)).toContain(setupPrompt());
   });
 
-  it('installs the plugin the same way punch setup does', () => {
-    expect(SETUP_INSTALL).toBe(['claude', ...INSTALL_ARGS].join(' '));
+  it('refreshes the marketplace the same way punch setup does', () => {
+    expect(SETUP_REFRESH[1]).toBe(['claude', ...REFRESH_ARGS].join(' '));
   });
 });

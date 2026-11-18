@@ -11,7 +11,7 @@ Claude keeps your repo's shared [Punchlist](https://punchlist.nnewberg.workers.d
 **To set up a repo**, open it in Claude Code and paste this:
 
 ```text
-Set up Punchlist for this repo. Run `claude plugin install punchlist --marketplace nnewberg/punchlist --scope project`. Then run `claude plugin list --json`, take the installPath of the punchlist@punchlist entry for this repo, and run `<installPath>/bin/punch setup`. Do the one next step it prints, then run it again, until it says "Setup complete". Ask me before committing anything.
+Set up Punchlist for this repo. Run `claude plugin marketplace add nnewberg/punchlist` (fine if it's already added), then `claude plugin marketplace update punchlist`. Then run `claude plugin marketplace list --json`, take the installLocation of the punchlist marketplace, and run `<installLocation>/plugins/punchlist/bin/punch setup`. Do the one next step it prints, then run it again, until it says "Setup complete". Ask me before committing anything.
 ```
 
 `punch setup` signs you in, gets the repo a board, turns the plugin on in `.claude/settings.json`, adds the CLAUDE.md pointer, and offers a PR. `/punch setup` runs it again any time, and `punch setup --check` is the health check.

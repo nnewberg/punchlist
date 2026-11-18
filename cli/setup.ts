@@ -8,6 +8,7 @@ import { getToken } from './config';
 import { formatCompact } from './format';
 import { applyInit, planInit, pluginSettingsObject } from './init';
 import { boardFromCwd, repoRoot, type BoardRef } from './repo';
+import { MARKETPLACE_REPO } from '../shared/setupPrompt';
 
 // `punch setup` (PL-020): everything a repo and a machine need for Punchlist, checked in order. Each
 // run fixes what it safely can and names the one next thing to do, so Claude (or a person) runs it
@@ -57,8 +58,24 @@ export interface SetupEnv {
 }
 
 export const PLUGIN_ID = 'punchlist@punchlist';
-const MARKETPLACE_REPO = 'nnewberg/punchlist';
+/** Installs the plugin for this repo, adding the marketplace first when Claude Code doesn't have one called punchlist. */
 export const INSTALL_ARGS = ['plugin', 'install', 'punchlist', '--marketplace', MARKETPLACE_REPO, '--scope', 'project'];
+/** The same from the punchlist marketplace already there, whatever its source (re-adding one from another source is refused). */
+export const INSTALL_FROM_MARKET_ARGS = ['plugin', 'install', PLUGIN_ID, '--scope', 'project'];
+/** Brings Claude Code's copy of the marketplace up to date: one added without auto-update stays where it was added. */
+export const REFRESH_ARGS = ['plugin', 'marketplace', 'update', 'punchlist'];
+const updateArgs = (scope: string) => ['plugin', 'update', PLUGIN_ID, '--scope', scope];
+
+/** -1, 0 or 1, comparing dotted version numbers. */
+export function compareVersions(a: string, b: string): number {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
 
 function runClaude(args: string[], cwd: string): string | null {
   try {
@@ -134,8 +151,8 @@ function listPlugins(env: SetupEnv, root: string): PluginEntry[] | null {
   }
 }
 
-/** The launcher in Claude Code's copy of the marketplace: a path that stays put across plugin updates. */
-function marketplaceLauncher(env: SetupEnv, root: string): string | null {
+/** The plugin's folder in Claude Code's copy of the marketplace: a path that stays put across plugin updates. */
+function marketplacePlugin(env: SetupEnv, root: string): { dir: string; version: string | null } | null {
   let out: string | null;
   try {
     out = (env.claude ?? runClaude)(['plugin', 'marketplace', 'list', '--json'], root);
@@ -145,8 +162,15 @@ function marketplaceLauncher(env: SetupEnv, root: string): string | null {
   if (!out) return null;
   try {
     const m = (JSON.parse(out) as { name?: string; installLocation?: string }[]).find(x => x.name === 'punchlist');
-    const p = m?.installLocation ? join(m.installLocation, 'plugins', 'punchlist', 'bin', 'punch') : null;
-    return p && existsSync(p) ? p : null;
+    const dir = m?.installLocation ? join(m.installLocation, 'plugins', 'punchlist') : null;
+    if (!dir || !existsSync(join(dir, 'bin', 'punch'))) return null;
+    let version: string | null = null;
+    try {
+      version = (JSON.parse(readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8')) as { version?: string }).version ?? null;
+    } catch {
+      // no manifest: compare nothing
+    }
+    return { dir, version };
   } catch {
     return null;
   }
@@ -306,8 +330,16 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
 
   // 6. The plugin, installed and on for this folder
   let plugins: PluginEntry[] | null = null;
+  let pluginChanged = false;
   if (!root) skip('plugin', 'Waiting on the repo');
   else {
+    if (fix) {
+      try {
+        (env.claude ?? runClaude)(REFRESH_ARGS, root);
+      } catch {
+        // not added yet (the install below adds it), or offline: check what's there
+      }
+    }
     plugins = listPlugins(env, root);
     if (plugins === null) {
       add({ id: 'plugin', state: 'skipped', summary: "Claude Code's `claude` command isn't on this PATH, so the plugin wasn't checked" });
@@ -315,24 +347,52 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
     } else {
       let here = pluginHere(plugins, root);
       let failed: string | null = null;
+      const install = marketplacePlugin(env, root) ? INSTALL_FROM_MARKET_ARGS : INSTALL_ARGS;
       if (!here && fix) {
         try {
-          (env.claude ?? runClaude)(INSTALL_ARGS, root);
+          (env.claude ?? runClaude)(install, root);
           plugins = listPlugins(env, root) ?? [];
           here = pluginHere(plugins, root);
         } catch (e) {
           failed = (e as Error).message;
         }
-        if (failed) add({ id: 'plugin', state: 'blocked', summary: "The plugin couldn't be installed", next: `${failed}. Show the user this, and run \`claude ${INSTALL_ARGS.join(' ')}\` yourself to see the whole message.` });
-        else if (here) add({ id: 'plugin', state: 'fixed', summary: `Installed the Punchlist plugin${here.version ? ` ${here.version}` : ''} for this repo` });
-        else add({ id: 'plugin', state: 'blocked', summary: 'The plugin installed but still isn’t on for this folder', next: `\`claude ${INSTALL_ARGS.join(' ')}\` ran, but \`claude plugin list --json\` doesn't show ${PLUGIN_ID} enabled for ${root}. Show the user that output.` });
-      } else if (!here) add({ id: 'plugin', state: 'action', summary: "The Punchlist plugin isn't on for this folder", next: `Run \`punch setup\` (it runs \`claude ${INSTALL_ARGS.join(' ')}\`).` });
-      else add({ id: 'plugin', state: 'ok', summary: `The Punchlist plugin${here.version ? ` ${here.version}` : ''} is on for this repo` });
+        if (failed) add({ id: 'plugin', state: 'blocked', summary: "The plugin couldn't be installed", next: `${failed}. Show the user this, and run \`claude ${install.join(' ')}\` yourself to see the whole message.` });
+        else if (here) {
+          pluginChanged = true;
+          add({ id: 'plugin', state: 'fixed', summary: `Installed the Punchlist plugin${here.version ? ` ${here.version}` : ''} for this repo` });
+        }
+        else add({ id: 'plugin', state: 'blocked', summary: 'The plugin installed but still isn’t on for this folder', next: `\`claude ${install.join(' ')}\` ran, but \`claude plugin list --json\` doesn't show ${PLUGIN_ID} enabled for ${root}. Show the user that output.` });
+      } else if (!here) add({ id: 'plugin', state: 'action', summary: "The Punchlist plugin isn't on for this folder", next: `Run \`punch setup\` (it runs \`claude ${install.join(' ')}\`).` });
+      else {
+        // On, but older than the marketplace's: an old plugin can miss what setup needs (it had no `setup` before 0.4.0).
+        const latest = marketplacePlugin(env, root)?.version;
+        if (latest && here.version && compareVersions(here.version, latest) < 0) {
+          const args = updateArgs(here.scope ?? 'project');
+          if (!fix) add({ id: 'plugin', state: 'action', summary: `The Punchlist plugin here is ${here.version}; ${latest} is out`, next: `Run \`punch setup\` (it runs \`claude ${args.join(' ')}\`).` });
+          else {
+            try {
+              (env.claude ?? runClaude)(args, root);
+              const now = pluginHere(listPlugins(env, root) ?? [], root);
+              if (now?.version && compareVersions(now.version, latest) >= 0) {
+                pluginChanged = true;
+                add({ id: 'plugin', state: 'fixed', summary: `Updated the Punchlist plugin from ${here.version} to ${now.version}` });
+              }
+              else add({ id: 'plugin', state: 'blocked', summary: `The Punchlist plugin is still ${now?.version ?? here.version}`, next: `\`claude ${args.join(' ')}\` ran, but the plugin for ${root} is still ${now?.version ?? here.version}, not ${latest}. Show the user \`claude plugin list --json\`.` });
+            } catch (e) {
+              add({ id: 'plugin', state: 'blocked', summary: "The plugin couldn't be updated", next: `${(e as Error).message}. Show the user this.` });
+            }
+          }
+        } else add({ id: 'plugin', state: 'ok', summary: `The Punchlist plugin${here.version ? ` ${here.version}` : ''} is on for this repo` });
+      }
     }
   }
-  const restart = penv.CLAUDECODE && !penv.PUNCH_PLUGIN_DATA
-    ? 'This Claude Code session started before the plugin was on, so it hasn’t loaded here. Tell the user to start a new Claude Code session in this repo: the board then appears at the start of every session.'
-    : null;
+  const restart = !penv.CLAUDECODE
+    ? null
+    : !penv.PUNCH_PLUGIN_DATA
+      ? 'This Claude Code session started before the plugin was on, so it hasn’t loaded here. Tell the user to start a new Claude Code session in this repo: the board then appears at the start of every session.'
+      : pluginChanged
+        ? 'The plugin was just updated, and Claude Code loads the new version in the next session. Tell the user to start a new Claude Code session in this repo.'
+        : null;
 
   // 7. The CLAUDE.md pointer
   let pointerChanged = false;
@@ -362,7 +422,8 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
   })();
   const shadow = terminalPunch(penv);
   if (env.link && !linked && root) {
-    const target = marketplaceLauncher(env, root);
+    const market = marketplacePlugin(env, root);
+    const target = market ? join(market.dir, 'bin', 'punch') : null;
     if (!target) add({ id: 'terminal', state: 'blocked', summary: "Couldn't find the plugin's launcher to link", next: 'Install the plugin first (`punch setup` does), then run `punch setup --link` again.' });
     else if (existsSync(linkPath)) add({ id: 'terminal', state: 'blocked', summary: `${linkPath} already exists`, next: `${linkPath} is something else, so setup won't replace it. Remove it, then run \`punch setup --link\` again.` });
     else {

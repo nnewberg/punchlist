@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveConfig, setToken } from '../config';
-import { formatSetup, INSTALL_ARGS, mergeSettings, runSetup, trackingFiles, type SetupEnv } from '../setup';
+import { compareVersions, formatSetup, INSTALL_ARGS, INSTALL_FROM_MARKET_ARGS, mergeSettings, REFRESH_ARGS, runSetup, trackingFiles, type SetupEnv } from '../setup';
 import { checkFlags } from '../args';
 
 // `punch setup` (PL-020): each step's check and fix, that a second run changes nothing, and that it
@@ -22,11 +22,30 @@ let boardItems: unknown[] = [];
 let plugins: Record<string, unknown>[];
 let claudeCalls: string[][];
 let marketplace: string | null;
+let marketVersion = '0.4.0';
+
+/** A marketplace copy on disk whose plugin is `version`. */
+function market(version: string) {
+  marketplace = mkdtempSync(join(tmpdir(), 'market-'));
+  marketVersion = version;
+  const dir = join(marketplace, 'plugins', 'punchlist');
+  mkdirSync(join(dir, 'bin'), { recursive: true });
+  mkdirSync(join(dir, '.claude-plugin'));
+  writeFileSync(join(dir, 'bin', 'punch'), '#!/bin/sh\n', { mode: 0o755 });
+  writeFileSync(join(dir, 'cli-version'), `${version}\n`);
+  writeFileSync(join(dir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'punchlist', version }));
+  return join(dir, 'bin');
+}
 const claude: SetupEnv['claude'] = args => {
   claudeCalls.push(args);
   if (args.join(' ') === 'plugin list --json') return JSON.stringify(plugins);
   if (args.join(' ') === 'plugin marketplace list --json') return JSON.stringify(marketplace ? [{ name: 'punchlist', installLocation: marketplace }] : []);
-  if (args.join(' ') === INSTALL_ARGS.join(' ')) {
+  if (args.join(' ') === REFRESH_ARGS.join(' ')) return 'ok';
+  if (args.join(' ') === 'plugin update punchlist@punchlist --scope project') {
+    for (const p of plugins) p.version = marketVersion;
+    return 'ok';
+  }
+  if (args.join(' ') === INSTALL_ARGS.join(' ') || args.join(' ') === INSTALL_FROM_MARKET_ARGS.join(' ')) {
     plugins.push({ id: 'punchlist@punchlist', version: '0.4.0', scope: 'project', enabled: true, projectPath: repo, projectEnabled: true });
     return 'ok';
   }
@@ -56,6 +75,7 @@ beforeEach(() => {
   plugins = [];
   claudeCalls = [];
   marketplace = null;
+  marketVersion = '0.4.0';
   vi.stubGlobal('fetch', async (url: string) => {
     const path = new URL(url).pathname;
     if (path === '/v1/me') {
@@ -206,11 +226,7 @@ describe('punch setup', () => {
 
   it('links the launcher into ~/.local/bin with --link', async () => {
     await signIn();
-    marketplace = mkdtempSync(join(tmpdir(), 'market-'));
-    const bin = join(marketplace, 'plugins', 'punchlist', 'bin');
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, 'punch'), '#!/bin/sh\n', { mode: 0o755 });
-    writeFileSync(join(marketplace, 'plugins', 'punchlist', 'cli-version'), '0.4.0\n');
+    const bin = market('0.4.0');
     const before = await setup();
     expect(before.offers.join('\n')).toMatch(/punch setup --link/);
     const r = await setup({ link: true });
@@ -240,6 +256,42 @@ describe('punch setup', () => {
     git('update-ref', 'refs/remotes/origin/main', 'HEAD');
     const r = await setup();
     expect(r.offers.join('\n')).not.toMatch(/open a PR|not on/);
+  });
+
+  it('installs from a punchlist marketplace that is already there, whatever its source', async () => {
+    await signIn();
+    market('0.4.0');
+    const r = await setup();
+    expect(step(r, 'plugin').state).toBe('fixed');
+    expect(claudeCalls).toContainEqual(INSTALL_FROM_MARKET_ARGS);
+    expect(claudeCalls).not.toContainEqual(INSTALL_ARGS);
+  });
+
+  it('refreshes the marketplace before checking the plugin, but not with --check', async () => {
+    await signIn();
+    await setup();
+    expect(claudeCalls[0]).toEqual(REFRESH_ARGS);
+    claudeCalls = [];
+    await setup({ check: true });
+    expect(claudeCalls).not.toContainEqual(REFRESH_ARGS);
+  });
+
+  it('updates a plugin older than the marketplace, and says to start a new session', async () => {
+    await signIn();
+    market('0.4.0');
+    plugins = [{ id: 'punchlist@punchlist', version: '0.3.3', scope: 'project', enabled: true, projectPath: repo, projectEnabled: true }];
+    const checked = await setup({ check: true });
+    expect(step(checked, 'plugin')).toMatchObject({ state: 'action', summary: 'The Punchlist plugin here is 0.3.3; 0.4.0 is out' });
+    const r = await setup({ env: { PATH: '/usr/bin:/bin', CLAUDECODE: '1', PUNCH_PLUGIN_DATA: '/x' } });
+    expect(step(r, 'plugin')).toMatchObject({ state: 'fixed', summary: 'Updated the Punchlist plugin from 0.3.3 to 0.4.0' });
+    expect(r.restart).toMatch(/just updated.*new Claude Code session/);
+    expect(step(await setup(), 'plugin').state).toBe('ok');
+  });
+
+  it('compares versions by number', () => {
+    expect(compareVersions('0.3.10', '0.4.0')).toBe(-1);
+    expect(compareVersions('0.10.0', '0.9.9')).toBe(1);
+    expect(compareVersions('1.0', '1.0.0')).toBe(0);
   });
 
   it('refuses flags it does not read', () => {
