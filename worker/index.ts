@@ -1,3 +1,4 @@
+import { ATTACHMENT_ID, MAX_IMAGE_BYTES, MAX_IMAGE_LABEL, refuseImage } from '../shared/attachments';
 import { BUILD_ID } from '../shared/build';
 import type { Actor, ImportFile, Me, Op } from '../shared/types';
 import { handleAuth, sameOrigin } from './auth';
@@ -178,6 +179,26 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
       return json({ ok: true, ...(await stub.session(info, { ...actor, user: user.login, session: actor.session }, action)) });
     }
 
+    // POST /files: an image to attach (PL-001), as the request body. Returns its id for the description's Markdown.
+    if (rest[0] === 'files' && rest.length === 1 && request.method === 'POST') {
+      if (!trusted) return json({ error: 'forbidden' }, 403);
+      if (role !== 'edit') return forbidden(readOnly);
+      if (Number(request.headers.get('content-length') ?? 0) > MAX_IMAGE_BYTES) return json({ ok: false, error: { code: 'invalid', message: `Images can be up to ${MAX_IMAGE_LABEL}.` } }, 413);
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const refused = refuseImage(bytes);
+      if (refused) return json({ ok: false, error: { code: 'invalid', message: refused } }, bytes.length > MAX_IMAGE_BYTES ? 413 : 415);
+      return json({ ok: true, ...(await stub.putFile(info, bytes.buffer, actorFor(request, user))) });
+    }
+
+    // GET /files/:id: an attached image, to anyone who can see the board. An id names its bytes, so it never changes.
+    if (rest[0] === 'files' && rest.length === 2 && request.method === 'GET') {
+      if (!ATTACHMENT_ID.test(rest[1]!)) return notFound();
+      if (request.headers.get('if-none-match') === `"${rest[1]}"`) return new Response(null, { status: 304, headers: fileHeaders(rest[1]!) });
+      const file = await stub.getFile(info, rest[1]!);
+      if (!file) return notFound();
+      return new Response(file.data, { headers: { ...fileHeaders(rest[1]!), 'content-type': file.type } });
+    }
+
     if (rest[0] === 'events' && request.method === 'GET') {
       const since = Number(url.searchParams.get('since') ?? 0);
       const out = await stub.eventsSince(info, since);
@@ -202,6 +223,18 @@ async function api(request: Request, env: Env, ctx: ExecutionContext, who: Ident
 
   return notFound();
 }
+
+/**
+ * An attached image is only ever shown as an image: never sniffed as something else, and opened on
+ * its own it runs nothing. Cached privately, since who may see it follows the board.
+ */
+const fileHeaders = (id: string) => ({
+  'cache-control': 'private, max-age=31536000, immutable',
+  etag: `"${id}"`,
+  'x-content-type-options': 'nosniff',
+  'content-security-policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+  'content-disposition': 'inline',
+});
 
 // The GitHub App's webhook (installs, uninstalls, renames: FR-1; pushes and PRs: FR-29) and its post-install redirect.
 async function github(request: Request, env: Env, url: URL): Promise<Response> {

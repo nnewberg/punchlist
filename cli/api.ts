@@ -1,5 +1,6 @@
 import { existsSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Attachment } from '../shared/attachments';
 import type { Item, Op, OpError, Snapshot } from '../shared/types';
 import { cacheDir, readJson, writeJson } from './config';
 import type { BoardRef } from './repo';
@@ -56,20 +57,47 @@ export class Client {
     return this.opts.session;
   }
 
-  async request<T>(method: string, path: string, body?: unknown, board?: BoardRef): Promise<T> {
+  private headers(): Record<string, string> {
     const headers: Record<string, string> = { 'x-punch-via': this.opts.session ? 'claude' : 'cli' };
     if (this.opts.token) headers.authorization = `Bearer ${this.opts.token}`;
     if (this.opts.session) headers['x-punch-session'] = this.opts.session;
-    if (body !== undefined) headers['content-type'] = 'application/json';
-    let res: Response;
+    return headers;
+  }
+
+  private async send(method: string, path: string, headers: Record<string, string>, body: string | Uint8Array<ArrayBuffer> | undefined, timeoutMs: number): Promise<Response> {
     try {
-      res = await fetch(`${this.opts.url}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(this.opts.timeoutMs ?? 15_000) });
+      return await fetch(`${this.opts.url}${path}`, { method, headers, body, signal: AbortSignal.timeout(timeoutMs) });
     } catch (e) {
       throw new NetworkError(`Can't reach ${this.opts.url} (${(e as Error).message})`);
     }
+  }
+
+  async request<T>(method: string, path: string, body?: unknown, board?: BoardRef): Promise<T> {
+    const headers = this.headers();
+    if (body !== undefined) headers['content-type'] = 'application/json';
+    const res = await this.send(method, path, headers, body === undefined ? undefined : JSON.stringify(body), this.opts.timeoutMs ?? 15_000);
     const data = res.status === 204 ? null : await res.json().catch(() => null);
     if (!res.ok && res.status !== 202) throw new ApiError(res.status, data, describe(res.status, data, board));
     return data as T;
+  }
+
+  /** Uploads an image to attach to the board (PL-001). */
+  async upload(b: BoardRef, bytes: Uint8Array<ArrayBuffer>, type: string): Promise<Attachment> {
+    const res = await this.send('POST', `${boardPath(b)}/files`, { ...this.headers(), 'content-type': type }, bytes, 60_000);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(res.status, data, describe(res.status, data, b));
+    return data as Attachment;
+  }
+
+  /** An attached image's bytes and type, or null if the board has no such image. */
+  async download(b: BoardRef, id: string): Promise<{ type: string; bytes: Uint8Array } | null> {
+    const res = await this.send('GET', `${boardPath(b)}/files/${id}`, this.headers(), undefined, 60_000);
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new ApiError(res.status, data, describe(res.status, data, b));
+    }
+    return { type: res.headers.get('content-type') ?? '', bytes: new Uint8Array(await res.arrayBuffer()) };
   }
 }
 

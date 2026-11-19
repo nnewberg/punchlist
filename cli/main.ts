@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
@@ -7,9 +7,11 @@ import { resolveId, STATUS_LABEL } from '../shared/ops';
 import { checkImport } from '../shared/import';
 import type { BoardEvent, Column, ImportFile, Me, MyWorkBoard, Op } from '../shared/types';
 import { ApiError, boardPath, Client, flush, NetworkError, readBoard, write, type ApplyResult, type FlushReport } from './api';
-import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
+import { baseUrl, cacheDir, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
 import { c, formatCompact, formatImportPlan, formatList, formatMine, formatShow } from './format';
 import { assignedElse, assignOp } from './assign';
+import { attachOp, checkImageFile, imagePath } from './attach';
+import { attachmentIds, MAX_IMAGE_BYTES, MAX_IMAGE_LABEL } from '../shared/attachments';
 import { bodyArg, editOp } from './edit';
 import { applyInit, planInit, pluginSettings } from './init';
 import { readHookInput, runHook } from './hooks';
@@ -29,6 +31,8 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
   show ID                       one item, with notes and history
   add "title" [-b body | --body-file path] [-s status] [-t tag]... [--deferred]   add an item (default: Backlog)
   edit ID [--title "title"] [-b body | --body-file path]       retitle it or replace its description (--body-file -: stdin)
+  attach ID FILE...             add images (PNG, JPEG, GIF, WebP; up to 10 MB) to the end of its description
+  images ID [-o dir]            save its description's images as files, and print where
   search "words"                the closest items, Done ones from the last 30 days too
   move ID status [--top | --before ID]             move it (backlog, next, progress, done)
   start ID [--steal]            claim it and move it to In Progress
@@ -323,6 +327,61 @@ async function run() {
       if (!op) return o.json ? printJson({ ok: true, noop: true, item: it }) : print(c.dim(`${it.id} already says that: nothing changed.`));
       const what = op.title !== undefined ? (op.body !== undefined ? 'the title and description' : 'the title') : 'the description';
       return change(`edit ${it.id}`, [op], r => `Edited ${what} of ${c.bold(lastItem(r).id)} ${lastItem(r).title}`);
+    }
+
+    case 'attach': {
+      const ref = need(args[0], 'an item ID');
+      const files = args.slice(1);
+      if (!files.length) throw new UsageError('Name the image files to attach, for example: punch attach BT-014 screenshot.png');
+      const images = files.map(path => {
+        let bytes: Uint8Array<ArrayBuffer>;
+        try {
+          // Refuse a big file by its size, before reading all of it.
+          if (statSync(path).size > MAX_IMAGE_BYTES) throw new UsageError(`${path}: Images can be up to ${MAX_IMAGE_LABEL}.`);
+          bytes = new Uint8Array(readFileSync(path));
+        } catch (e) {
+          if (e instanceof UsageError) throw e;
+          throw new UsageError(`Can't read ${path}: ${(e as Error).message}`);
+        }
+        return { path, bytes, type: checkImageFile(path, bytes) };
+      });
+      const b = board();
+      const api = await client();
+      reportFlush(await flush(api, b));
+      const { snapshot, offlineSince } = await readBoard(api, b);
+      if (offlineSince) throw new Error('Offline: images can only be attached while the board can be reached.');
+      const it = resolveId(new Map(snapshot.items.map(i => [i.id, i])), ref);
+      if (!it) throw new Error(`No item ${ref} on ${b.owner}/${b.repo}.`);
+      const uploads = await Promise.all(images.map(async img => ({ path: img.path, id: (await api.upload(b, img.bytes, img.type)).id })));
+      const op = attachOp(it, uploads);
+      if (!op) return o.json ? printJson({ ok: true, noop: true, item: it }) : print(c.dim(`${it.id} already has ${files.length === 1 ? 'that image' : 'those images'}: nothing changed.`));
+      const n = uploads.length;
+      return change(`attach to ${it.id}`, [op], r => `Attached ${n === 1 ? 'an image' : `${n} images`} to ${c.bold(lastItem(r).id)} ${lastItem(r).title}`);
+    }
+
+    case 'images': {
+      const ref = need(args[0], 'an item ID');
+      const b = board();
+      const api = await client();
+      const { snapshot, offlineSince } = await readBoard(api, b);
+      if (offlineSince) throw new Error('Offline: images can only be fetched while the board can be reached.');
+      const it = resolveId(new Map(snapshot.items.map(i => [i.id, i])), ref);
+      if (!it) throw new Error(`No item ${ref} on ${b.owner}/${b.repo}.`);
+      const ids = attachmentIds(it.body);
+      if (!ids.length) return o.json ? printJson({ images: [] }) : print(c.dim(`${it.id} has no images.`));
+      // This person's own cache, not a shared temp directory another user could plant links in.
+      const dir = o.out ?? join(cacheDir(), 'images', b.owner.toLowerCase(), b.repo.toLowerCase());
+      mkdirSync(dir, { recursive: true });
+      const saved = await Promise.all(ids.map(async (id, i) => {
+        const file = await api.download(b, id);
+        if (!file) return { id, path: null };
+        const path = imagePath(dir, it.id, i + 1, file.type);
+        writeFileSync(path, file.bytes);
+        return { id, path };
+      }));
+      if (o.json) return printJson({ images: saved });
+      for (const s of saved) print(s.path ?? c.yellow(`attachment:${s.id} isn't on this board`));
+      return;
     }
 
     case 'search':

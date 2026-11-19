@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import Markdown from 'react-markdown';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import Markdown, { defaultUrlTransform } from 'react-markdown';
+import { altFor, appendImage, IMAGE_TYPES, imageMarkdown, MAX_IMAGE_BYTES, MAX_IMAGE_LABEL } from '../../shared/attachments';
 import { person } from '../../shared/config';
 import { age, openDeps, workBranch } from '../../shared/derive';
 import { githubUrl, shortSha } from '../../shared/github';
 import { STATUS_LABEL } from '../../shared/ops';
 import { COLUMNS, type BoardEvent, type BoardInfo, type Column, type Item, type Op, type OpError } from '../../shared/types';
-import { api, boardApi } from '../api';
+import { api, attachmentUrl, boardApi, uploadImage } from '../api';
 import type { BoardClient } from '../boardClient';
 import { Avatar, ChevronIcon, CloseIcon, Field, Glyph, InlineInput, TrashIcon, useDismiss } from './ui';
 
@@ -93,7 +94,7 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
             </div>
           )}
           <Title item={item} readOnly={ro} onSave={title => send({ op: 'edit', id: item.id, title })} />
-          <Body item={item} client={client} readOnly={ro} />
+          <Body item={item} board={board} client={client} readOnly={ro} />
 
           <div className="fields">
             <Field label="Status">
@@ -338,24 +339,108 @@ function Title({ item, onSave, readOnly }: { item: Item; onSave: (t: string) => 
   );
 }
 
+/** A description: Markdown, with attached images served from the board, each opening full size in a new tab. */
+function Md({ text, board }: { text: string; board: BoardInfo }) {
+  return (
+    <Markdown
+      urlTransform={url => attachmentUrl(board, url) ?? defaultUrlTransform(url)}
+      components={{
+        img: ({ src, alt }) => (
+          <a className="md-img" href={typeof src === 'string' ? src : undefined} target="_blank" rel="noreferrer">
+            <img src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} loading="lazy" />
+          </a>
+        ),
+      }}
+    >
+      {text}
+    </Markdown>
+  );
+}
+
+const isImage = (f: File) => (IMAGE_TYPES as readonly string[]).includes(f.type);
+
 // Body edits carry the version they started from; if someone else saved in between, show their text
-// and keep this draft rather than dropping it (FR-8).
-function Body({ item, client, readOnly }: { item: Item; client: BoardClient; readOnly: boolean }) {
+// and keep this draft rather than dropping it (FR-8). Images pasted, dropped or picked are uploaded to
+// the board and then land in the draft as Markdown (PL-001); the draft can't be saved until they're in.
+function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo; client: BoardClient; readOnly: boolean }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [base, setBase] = useState(item.body_version);
   const [conflict, setConflict] = useState<Extract<OpError, { code: 'conflict' }> | null>(null);
+  const [uploading, setUploading] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  /** Bumped when a draft is dropped, so uploads still running for it change nothing after. */
+  const epoch = useRef(0);
+  /** Where the caret goes after images are put in, since setting the text moves it to the end. */
+  const caret = useRef<number | null>(null);
 
-  useEffect(() => {
+  /** Drops the draft, and with it any uploads still running for it. */
+  const discard = () => {
+    epoch.current += 1;
+    setUploading(0);
     setDraft(null);
     setConflict(null);
-  }, [item.id]);
+    setUploadError(null);
+  };
+
+  useEffect(discard, [item.id]);
+
+  useLayoutEffect(() => {
+    if (caret.current === null || !textarea.current) return;
+    textarea.current.setSelectionRange(caret.current, caret.current);
+    caret.current = null;
+  }, [draft]);
 
   const start = () => {
     setDraft(item.body);
     setBase(item.body_version);
   };
+
+  /**
+   * Uploads the images among `files`, then puts them in together, in order, where the caret is by
+   * then (or at the end). Save waits for them. Returns whether there were any.
+   */
+  const attach = (files: File[], where: 'cursor' | 'end' = 'cursor') => {
+    const images = files.filter(isImage);
+    if (!images.length) {
+      if (files.length) setUploadError('Only PNG, JPEG, GIF and WebP images can be attached.');
+      return false;
+    }
+    const big = images.find(f => f.size > MAX_IMAGE_BYTES);
+    setUploadError(big ? `${big.name} is over ${MAX_IMAGE_LABEL}.` : null);
+    const ok = images.filter(f => f.size <= MAX_IMAGE_BYTES);
+    if (!ok.length) return true;
+    const run = epoch.current;
+    setUploading(n => n + ok.length);
+    void Promise.allSettled(ok.map(f => uploadImage(board, f))).then(results => {
+      if (run !== epoch.current) return;
+      setUploading(n => n - ok.length);
+      const failed = results.find(r => r.status === 'rejected');
+      if (failed) setUploadError((failed.reason as Error).message);
+      const block = results.flatMap((r, i) => (r.status === 'fulfilled' ? [imageMarkdown(altFor(ok[i]!.name), r.value.id)] : [])).join('\n\n');
+      if (block) insert(block, where);
+    });
+    return true;
+  };
+
+  /** Puts Markdown in the draft on lines of its own, so it shows as a block, with the caret after it. */
+  const insert = (block: string, where: 'cursor' | 'end') => {
+    const ta = where === 'cursor' && document.activeElement === textarea.current ? textarea.current : null;
+    const sel = ta ? [ta.selectionStart, ta.selectionEnd] as const : null;
+    setDraft(d => {
+      const text = d ?? item.body;
+      if (!sel) return appendImage(text, block);
+      const before = text.slice(0, sel[0]), after = text.slice(sel[1]);
+      const lead = before && !before.endsWith('\n') ? '\n\n' : '';
+      caret.current = before.length + lead.length + block.length;
+      return `${before}${lead}${block}${after && !after.startsWith('\n') ? '\n\n' : ''}${after}`;
+    });
+  };
+  const filesIn = (dt: DataTransfer | null) => [...(dt?.files ?? [])];
+
   const save = async (version = base) => {
-    if (draft === null) return;
+    if (draft === null || uploading) return;
     const r = await client.send({ op: 'edit', id: item.id, body: draft, baseBodyVersion: version });
     if (r.ok) {
       setDraft(null);
@@ -364,12 +449,23 @@ function Body({ item, client, readOnly }: { item: Item; client: BoardClient; rea
   };
 
   if (readOnly) {
-    return item.body.trim() ? <div className="body-view ro"><div className="md"><Markdown>{item.body}</Markdown></div></div> : null;
+    return item.body.trim() ? <div className="body-view ro"><div className="md"><Md text={item.body} board={board} /></div></div> : null;
   }
   if (draft === null) {
     return (
-      <div className="body-view" onClick={e => !(e.target instanceof HTMLAnchorElement) && start()} title="Click to edit">
-        {item.body.trim() ? <div className="md"><Markdown>{item.body}</Markdown></div> : <div className="md empty">Add a description…</div>}
+      <div
+        className="body-view"
+        onClick={e => !(e.target as Element).closest('a') && start()}
+        onDragOver={e => e.dataTransfer.types.includes('Files') && e.preventDefault()}
+        onDrop={e => {
+          if (!filesIn(e.dataTransfer).length) return;
+          e.preventDefault();
+          start();
+          attach(filesIn(e.dataTransfer), 'end');
+        }}
+        title="Click to edit, or drop an image here"
+      >
+        {item.body.trim() ? <div className="md"><Md text={item.body} board={board} /></div> : <div className="md empty">Add a description…</div>}
       </div>
     );
   }
@@ -387,23 +483,50 @@ function Body({ item, client, readOnly }: { item: Item; client: BoardClient; rea
         </div>
       )}
       <textarea
+        ref={textarea}
         autoFocus
         data-not-draft
         value={draft}
         onChange={e => setDraft(e.target.value)}
+        onPaste={e => {
+          // Rich text copied from a document or page (plain and HTML both) pastes as its text, even with
+          // images in it. Anything else with an image in it, a screenshot or a file, attaches the image.
+          const types = e.clipboardData.types;
+          if (types.includes('text/plain') && types.includes('text/html')) return;
+          if (attach(filesIn(e.clipboardData))) e.preventDefault();
+        }}
+        onDragOver={e => e.dataTransfer.types.includes('Files') && e.preventDefault()}
+        onDrop={e => {
+          if (!filesIn(e.dataTransfer).length) return;
+          e.preventDefault();
+          attach(filesIn(e.dataTransfer));
+        }}
         onKeyDown={e => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save();
           if (e.key === 'Escape') {
             e.stopPropagation();
-            setDraft(null);
-            setConflict(null);
+            discard();
           }
         }}
-        placeholder="Markdown — one line or a full spec"
+        placeholder="Markdown — one line or a full spec. Paste or drop images in."
       />
+      {uploadError && <div className="upload-error">{uploadError}<button className="btn-link" onClick={() => setUploadError(null)}>Dismiss</button></div>}
       <div className="row">
-        <button className="btn btn-accent" onClick={() => save()}>Save</button>
-        <button className="btn" onClick={() => (setDraft(null), setConflict(null))}>Cancel</button>
+        <button className="btn btn-accent" disabled={!!uploading} onClick={() => save()}>{uploading ? 'Uploading…' : 'Save'}</button>
+        <button className="btn" onClick={discard}>Cancel</button>
+        <button className="btn" onClick={() => picker.current?.click()}>Attach image</button>
+        <input
+          ref={picker}
+          type="file"
+          accept={IMAGE_TYPES.join(',')}
+          multiple
+          hidden
+          onChange={e => {
+            attach([...(e.currentTarget.files ?? [])]);
+            e.currentTarget.value = '';
+            textarea.current?.focus();
+          }}
+        />
         <span style={{ fontSize: 11, color: 'var(--fg3)' }}>⌘⏎ to save · Markdown</span>
       </div>
     </div>
