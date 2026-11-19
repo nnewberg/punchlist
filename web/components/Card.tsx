@@ -14,7 +14,7 @@ export interface CardDnd {
 
 // FR-13, laid out as in the design: the card names only the person working on an item, whether
 // they or their agent does the work; a branch claim adds the branch name, and so does a Done item
-// closed by a merged PR (its head branch).
+// closed by a merged PR (its head branch). Its tags show too, for scanning a long backlog (PL-026).
 export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
   item: Item;
   items: ReadonlyMap<string, Item>;
@@ -32,7 +32,7 @@ export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
   const done = item.status === 'done';
   // FR-13: a fix that exists but hasn't reached the default branch yet.
   const pending = done ? undefined : item.citations.find(c => c.kind === 'pending');
-  const hasMeta = !!claim || !!branch || blocked || !!note || !!pending;
+  const hasMeta = !!claim || !!branch || blocked || !!note || !!pending || item.tags.length > 0;
 
   return (
     <div
@@ -98,6 +98,11 @@ export function Card({ item, items, caption, arrived, focused, onOpen, dnd }: {
               <span className="card-note">
                 <span className="pen">✎</span>
                 <span className="txt">{note}</span>
+              </span>
+            )}
+            {item.tags.length > 0 && (
+              <span className="card-tags">
+                {item.tags.map(t => <span key={t} className="tag sm">{t}</span>)}
               </span>
             )}
             <span className="card-id">{item.id}</span>
