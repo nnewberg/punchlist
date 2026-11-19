@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveConfig, setToken } from '../config';
-import { compareVersions, formatSetup, INSTALL_ARGS, INSTALL_FROM_MARKET_ARGS, mergeSettings, REFRESH_ARGS, runSetup, trackingFiles, type SetupEnv } from '../setup';
+import { compareVersions, formatSetup, INSTALL_ARGS, INSTALL_FROM_MARKET_ARGS, mergeSettings, movedRemote, REFRESH_ARGS, runSetup, trackingFiles, type SetupEnv } from '../setup';
 import { checkFlags } from '../args';
 
 // `punch setup` (PL-020): each step's check and fix, that a second run changes nothing, and that it
@@ -204,6 +204,48 @@ describe('punch setup', () => {
     me.boards = [];
     const r = await setup({ waitBoard: true, pollMs: 5, waitMs: 30 });
     expect(step(r, 'board')).toMatchObject({ state: 'blocked', next: expect.stringMatching(/Still no board/) });
+  });
+
+  it('says how to fix a remote left behind when the repo moved, instead of blaming the App', async () => {
+    await signIn();
+    me.boards = [{ owner: 'futureleisurefoundation', repo: 'punchlist-sandbox', prefix: 'FS', role: 'edit' }];
+    me.allowedOwners = ['futureleisurefoundation']; // the old owner needn't be served for this to apply
+    const r = await setup();
+    expect(step(r, 'board')).toMatchObject({ state: 'action', summary: 'origin says nnewberg/punchlist-sandbox, but the board is futureleisurefoundation/punchlist-sandbox' });
+    expect(r.next).toContain('`git remote set-url origin git@github.com:futureleisurefoundation/punchlist-sandbox.git`');
+    expect(r.next).not.toMatch(/isn't installed/);
+  });
+
+  it("doesn't wait for a board that's under the repo's new name", async () => {
+    await signIn();
+    me.boards = [{ owner: 'futureleisurefoundation', repo: 'punchlist-sandbox', prefix: 'FS', role: 'edit' }];
+    const lines: string[] = [];
+    const r = await setup({ waitBoard: true, pollMs: 10, waitMs: 2_000, progress: l => lines.push(l) });
+    expect(step(r, 'board').summary).toMatch(/but the board is futureleisurefoundation/);
+    expect(meCalls).toBe(1);
+    expect(lines).toEqual([]);
+  });
+
+  it('says it is still waiting while it waits, and stops once the board turns up under a new name', async () => {
+    await signIn();
+    me.boards = [];
+    const lines: string[] = [];
+    setTimeout(() => (me.boards = [{ owner: 'futureleisurefoundation', repo: 'punchlist-sandbox', prefix: 'FS', role: 'edit' }]), 80);
+    const started = Date.now();
+    const r = await setup({ waitBoard: true, pollMs: 5, waitMs: 2_000, progressMs: 20, progress: l => lines.push(l) });
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(step(r, 'board').summary).toMatch(/but the board is futureleisurefoundation/);
+    expect(lines[0]).toMatch(/^Waiting up to 2 s for the board for nnewberg\/punchlist-sandbox to appear/);
+    expect(lines.slice(1).length).toBeGreaterThan(0);
+    expect(lines[1]).toMatch(/^Still no board for nnewberg\/punchlist-sandbox after \d+ s; checking for \d+ s more\.$/);
+  });
+
+  it('keeps the form of the remote when pointing it at the new name', () => {
+    const from = { owner: 'nnewberg', repo: 'fortune-teller-agent' };
+    const to = { owner: 'futureleisurefoundation', repo: 'fortune-teller-agent' };
+    expect(movedRemote('https://github.com/nnewberg/fortune-teller-agent.git', from, to)).toBe('https://github.com/futureleisurefoundation/fortune-teller-agent.git');
+    expect(movedRemote('git@github.com:NNewberg/fortune-teller-agent', from, to)).toBe('git@github.com:futureleisurefoundation/fortune-teller-agent');
+    expect(movedRemote('', from, to)).toBe('https://github.com/futureleisurefoundation/fortune-teller-agent.git');
   });
 
   it('says plainly when Punchlist does not serve the owner', async () => {
