@@ -33,7 +33,7 @@ Usage: punch <command> [args] [--json] [--board owner/repo]
   move ID status [--top | --before ID]             move it (backlog, next, progress, done)
   start ID [--steal]            claim it and move it to In Progress
   release ID                    give it back (also how to unassign it)
-  assign ID login [--steal]     give it to someone who can edit the board; it moves to In Progress
+  assign ID login [--steal]     give it to someone who can edit the board; it stays in its column
   block ID reason / unblock ID
   close ID [-m note]            mark it Done
   reopen ID

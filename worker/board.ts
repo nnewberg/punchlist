@@ -205,6 +205,7 @@ export class BoardDO extends DurableObject<Env> {
     return {
       board: this.info!,
       held: columnItems(all, 'in_progress').filter(i => i.claim?.user === user),
+      assigned: [...columnItems(all, 'up_next'), ...columnItems(all, 'backlog')].filter(i => i.claim?.user === user),
       upNext: columnItems(all, 'up_next').slice(0, 3),
       blockedOnMe: all.filter(i => i.blocked && i.status !== 'done' && i.status !== 'dropped' && mentions(i.blocked.reason)),
     };

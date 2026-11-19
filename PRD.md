@@ -318,12 +318,12 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
   - `/punch start` or `punch start`
   - dragging the card to In Progress
   - pushing a branch whose name contains an ID (`bb-031-…`); the claim goes to the person who pushed
-  - assigning it to someone who can edit the board, in the sheet's Assignee menu or with `punch assign`; it's a manual claim made on their behalf
+  - assigning it to someone who can edit the board, yourself included, in the sheet's Assignee menu or with `punch assign`; it's a manual claim made on their behalf. Assigning leaves the item in its column (PL-024): an item can be assigned in Backlog or Up Next and started later. The others move it to In Progress.
 - **FR-27 One holder per item.** A claim on an item that is already held fails and names the current holder. The holder can be overridden with `--steal`, which is recorded in the log.
 - **FR-28 Claim lifetime:**
   - Session claims expire after a TTL with no heartbeat (default 2 hours).
   - Branch claims end when the branch is deleted or merged. A merged branch named for an item closes it (`how: branch`) unless the branch's commits or PR say `Refs:` for it, which marks partial progress (§12).
-  - Manual claims last until they are released.
+  - Manual claims last until they are released. Moving an item out of In Progress keeps a manual claim and ends a session or branch claim.
   - When a claim ends without a close, the item goes back to the column it was in before.
 
 ### 7.7 GitHub integration and auto-close

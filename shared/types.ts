@@ -236,6 +236,8 @@ export type ServerMsg =
 export interface MyWorkBoard {
   board: BoardInfo;
   held: Item[];
+  /** Assigned to me but not started, in Up Next then Backlog (PL-024). Missing from servers before it. */
+  assigned?: Item[];
   upNext: Item[];
   blockedOnMe: Item[];
 }

@@ -53,7 +53,7 @@ function section(list: Item[], caption: string, board: BoardInfo, seen: Set<stri
   return list.filter(i => !seen.has(i.id) && (seen.add(i.id), true)).map((item, i) => ({ item, board, ...(i === 0 ? { caption } : {}) }));
 }
 
-// FR-35: everything I or my agents hold, plus each board's Up Next and anything blocked on me.
+// FR-35: everything I or my agents hold, what's assigned to me but not started (PL-024), plus each board's Up Next and anything blocked on me.
 export function MyWorkPage({ me, boards }: { me: string; boards: BoardInfo[] }) {
   const [data, setData] = useState<MyWorkBoard[] | null>(null);
   const [query, setQuery] = useState('');
@@ -68,6 +68,7 @@ export function MyWorkPage({ me, boards }: { me: string; boards: BoardInfo[] }) 
       board: b.board,
       entries: [
         ...section(b.held, 'In progress', b.board, seen),
+        ...section(b.assigned ?? [], 'Assigned to you', b.board, seen),
         ...section(b.blockedOnMe, 'Blocked on you', b.board, seen),
         ...section(b.upNext, 'Up next', b.board, seen),
       ],
