@@ -340,7 +340,8 @@ function TagInput({ item, items, onAdd, onClose }: { item: Item; items: Readonly
   const q = typed.length === 1 ? typed[0]! : '';
   const matches = typed.length > 1 ? [] : [...counts.keys()]
     .filter(t => !item.tags.includes(t) && t.includes(q))
-    .sort((a, b) => Number(b.startsWith(q)) - Number(a.startsWith(q)) || counts.get(b)! - counts.get(a)! || a.localeCompare(b))
+    // An exact match first, so typing "bug" never adds a more-used "bugfix"; then prefix matches, then use.
+    .sort((a, b) => Number(b === q) - Number(a === q) || Number(b.startsWith(q)) - Number(a.startsWith(q)) || counts.get(b)! - counts.get(a)! || a.localeCompare(b))
     .slice(0, 8);
   const fresh = typed.filter(t => !item.tags.includes(t));
   const isNew = fresh.length > 0 && !(fresh.length === 1 && counts.has(fresh[0]!));
@@ -376,6 +377,8 @@ function TagInput({ item, items, onAdd, onClose }: { item: Item; items: Readonly
           if (e.key === 'ArrowDown' && n) (e.preventDefault(), setHi(h => Math.min(h + 1, n - 1 + base)));
           if (e.key === 'ArrowUp' && n) (e.preventDefault(), setHi(h => Math.max(h - 1, 0)));
           if (e.key === 'Enter' && sel >= 0 && rows[sel]) (e.preventDefault(), pick(rows[sel].tags));
+          // Only tags it already has: nothing to add, so just clear the input.
+          else if (e.key === 'Enter' && text.trim() && !n) (e.preventDefault(), setText(''));
           if (e.key === 'Escape') {
             e.stopPropagation();
             onClose();
