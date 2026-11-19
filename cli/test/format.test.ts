@@ -53,6 +53,16 @@ describe('compact board (FR-18)', () => {
     expect(out).not.toContain('a note that should never');
     expect(out).not.toMatch(/BT-05[0-9]/); // Done stays out
   });
+
+  it('shows whose an Up Next or Backlog item is when it is assigned but not started (PL-024)', () => {
+    const snap = board();
+    snap.items.find(i => i.id === 'BT-008')!.claim = { user: 'kevin', kind: 'manual', since: now };
+    snap.items.find(i => i.id === 'BT-019')!.claim = { user: 'nick', kind: 'manual', since: now };
+    const out = formatCompact(snap, { me: 'nick' });
+    expect(out).toMatch(/BT-008 .* \[assigned kevin\]/);
+    expect(out).toMatch(/BT-019 .* \[assigned nick \(you\)\]/);
+    expect(out).not.toMatch(/BT-009 .*assigned/);
+  });
 });
 
 describe('list', () => {

@@ -26,6 +26,16 @@ describe('BoardDO', () => {
     expect(since?.events[0]!.item.notes[0]!.text).toBe('hello');
   });
 
+  it("My work lists what's assigned to you but not started, apart from what you hold (PL-024)", async () => {
+    const b = stub();
+    for (const t of ['a', 'b', 'c']) await b.apply(info, { op: 'create', title: t, status: 'up_next' }, nick);
+    await b.apply(info, { op: 'claim', id: 'PL-001', user: 'nick' }, nick);
+    await b.apply(info, { op: 'claim', id: 'PL-002' }, nick);
+    const w = await b.myWork(info, 'nick', 'Nick Newberg');
+    expect(w.held.map(i => i.id)).toEqual(['PL-002']);
+    expect(w.assigned?.map(i => i.id)).toEqual(['PL-001']);
+  });
+
   it('undo is a new event that restores the earlier state (FR-15)', async () => {
     const b = stub();
     await b.apply(info, { op: 'create', title: 'a', status: 'up_next' }, nick);
