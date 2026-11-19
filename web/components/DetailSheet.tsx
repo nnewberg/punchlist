@@ -114,7 +114,7 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
                 <span key={t} className="tag">{t}{!ro && <button aria-label={`Remove ${t}`} onClick={() => send({ op: 'tag', id: item.id, remove: [t] })}>×</button>}</span>
               ))}
               {ro ? (!item.tags.length && <span style={{ color: 'var(--fg3)' }}>None</span>) : adding === 'tag'
-                ? <InlineInput placeholder="tag" onSubmit={v => (send({ op: 'tag', id: item.id, add: v.split(/[\s,]+/) }), setAdding(null))} onCancel={() => setAdding(null)} />
+                ? <TagInput item={item} items={items} onAdd={add => send({ op: 'tag', id: item.id, add })} onClose={() => setAdding(null)} />
                 : <button className="btn-dashed" onClick={() => setAdding('tag')}>+ tag</button>}
             </Field>
             <Field label="Blocked">
@@ -308,6 +308,104 @@ function AssigneePicker({ item, editors, me, send }: { item: Item; editors: stri
           <button className={`menu-item${holder ? '' : ' current'}`} onClick={() => pick(null)}>
             <span style={{ color: 'var(--fg3)' }}>Unassigned</span>
           </button>
+        </div>
+      )}
+    </span>
+  );
+}
+
+const splitTags = (v: string) => v.toLowerCase().split(/[\s,]+/).filter(Boolean);
+
+/**
+ * Adding a tag (PL-027): the board's tags show as you type, most used first, so an existing one gets
+ * reused instead of a near-duplicate. With text typed, Enter takes the highlighted row, which is the
+ * best match when there is one; "New tag" is always the last row. It stays open to add several.
+ */
+function TagInput({ item, items, onAdd, onClose }: { item: Item; items: ReadonlyMap<string, Item>; onAdd: (tags: string[]) => void; onClose: () => void }) {
+  const [text, setText] = useState('');
+  const [hi, setHi] = useState(0);
+  const [up, setUp] = useState(false);
+  const [focused, setFocused] = useState(true);
+  const input = useRef<HTMLInputElement>(null);
+
+  useLayoutEffect(() => {
+    const r = input.current!.getBoundingClientRect();
+    const body = input.current!.closest('.sheet-body')?.getBoundingClientRect();
+    if (body) setUp(body.bottom - r.bottom < 300 && r.top - body.top > body.bottom - r.bottom);
+  }, []);
+
+  const counts = new Map<string, number>();
+  for (const it of items.values()) for (const t of it.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+  const typed = splitTags(text);
+  const q = typed.length === 1 ? typed[0]! : '';
+  const matches = typed.length > 1 ? [] : [...counts.keys()]
+    .filter(t => !item.tags.includes(t) && t.includes(q))
+    // An exact match first, so typing "bug" never adds a more-used "bugfix"; then prefix matches, then use.
+    .sort((a, b) => Number(b === q) - Number(a === q) || Number(b.startsWith(q)) - Number(a.startsWith(q)) || counts.get(b)! - counts.get(a)! || a.localeCompare(b))
+    .slice(0, 8);
+  const fresh = typed.filter(t => !item.tags.includes(t));
+  const isNew = fresh.length > 0 && !(fresh.length === 1 && counts.has(fresh[0]!));
+  const rows: { tags: string[]; label?: string }[] = [
+    ...matches.map(t => ({ tags: [t] })),
+    ...(isNew ? [{ tags: fresh, label: fresh.length > 1 ? `Add ${fresh.join(', ')}` : `New tag “${fresh[0]}”` }] : []),
+  ];
+  const sel = text.trim() ? Math.min(hi, rows.length - 1) : hi - 1;
+
+  const pick = (tags: string[]) => {
+    onAdd(tags);
+    setText('');
+    setHi(0);
+    input.current?.focus();
+  };
+
+  return (
+    <span style={{ position: 'relative' }}>
+      <input
+        ref={input}
+        autoFocus
+        className="inline-input"
+        placeholder="tag"
+        value={text}
+        role="combobox"
+        aria-expanded={focused && rows.length > 0}
+        aria-autocomplete="list"
+        onChange={e => (setText(e.target.value), setHi(0))}
+        onKeyDown={e => {
+          const n = rows.length;
+          // With nothing typed, nothing is highlighted until you arrow down, so Enter can't add a tag by accident.
+          const base = text.trim() ? 0 : 1;
+          if (e.key === 'ArrowDown' && n) (e.preventDefault(), setHi(h => Math.min(h + 1, n - 1 + base)));
+          if (e.key === 'ArrowUp' && n) (e.preventDefault(), setHi(h => Math.max(h - 1, 0)));
+          if (e.key === 'Enter' && sel >= 0 && rows[sel]) (e.preventDefault(), pick(rows[sel].tags));
+          // Only tags it already has: nothing to add, so just clear the input.
+          else if (e.key === 'Enter' && text.trim() && !n) (e.preventDefault(), setText(''));
+          if (e.key === 'Escape') {
+            e.stopPropagation();
+            onClose();
+          }
+        }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => (text.trim() ? setFocused(false) : onClose())}
+      />
+      {focused && rows.length > 0 && (
+        <div className="menu tag-menu" role="listbox" style={up ? { bottom: 28, left: 0 } : { top: 28, left: 0 }}>
+          {!text.trim() && <div className="menu-label">Tags on this board</div>}
+          {rows.map((r, i) => (
+            <button
+              key={r.label ?? r.tags[0]}
+              role="option"
+              aria-selected={i === sel}
+              className={`menu-item${i === sel ? ' current' : ''}`}
+              // Keep focus in the input, so blurring doesn't close the menu before the click lands.
+              onMouseDown={e => e.preventDefault()}
+              onMouseEnter={() => setHi(i + (text.trim() ? 0 : 1))}
+              onClick={() => pick(r.tags)}
+            >
+              {r.label
+                ? <span className="new">{r.label}</span>
+                : <><span className="tag">{r.tags[0]}</span><span className="n">{counts.get(r.tags[0]!)}</span></>}
+            </button>
+          ))}
         </div>
       )}
     </span>
