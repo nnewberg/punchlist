@@ -133,6 +133,7 @@ interface PluginEntry {
   enabled?: boolean;
   projectPath?: string;
   projectEnabled?: boolean;
+  installPath?: string;
 }
 
 function pluginHere(list: PluginEntry[], root: string): PluginEntry | undefined {
@@ -152,7 +153,7 @@ function listPlugins(env: SetupEnv, root: string): PluginEntry[] | null {
 }
 
 /** The plugin's folder in Claude Code's copy of the marketplace: a path that stays put across plugin updates. */
-function marketplacePlugin(env: SetupEnv, root: string): { dir: string; version: string | null } | null {
+function marketplacePlugin(env: SetupEnv, root: string): MarketPlugin | null {
   let out: string | null;
   try {
     out = (env.claude ?? runClaude)(['plugin', 'marketplace', 'list', '--json'], root);
@@ -174,6 +175,11 @@ function marketplacePlugin(env: SetupEnv, root: string): { dir: string; version:
   } catch {
     return null;
   }
+}
+
+interface MarketPlugin {
+  dir: string;
+  version: string | null;
 }
 
 // ---- `punch` in a terminal ----
@@ -215,8 +221,24 @@ export function trackingFiles(root: string): string[] {
 function defaultRef(root: string): string | null {
   const head = git(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], root);
   if (head) return head.replace(/^refs\/remotes\//, '');
-  for (const r of ['origin/main', 'origin/master']) if (git(['rev-parse', '--verify', '--quiet', r], root)) return r;
+  // Nothing fetched from origin, so nothing to compare against (and no need to ask it).
+  if (!git(['for-each-ref', '--count=1', 'refs/remotes/origin'], root)) return null;
+  // A clone without origin/HEAD (or a default branch that isn't main or master): ask origin.
+  const remote = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(git(['ls-remote', '--symref', 'origin', 'HEAD'], root) ?? '')?.[1];
+  for (const r of [...(remote ? [`origin/${remote}`] : []), 'origin/main', 'origin/master']) if (git(['rev-parse', '--verify', '--quiet', r], root)) return r;
   return null;
+}
+
+// ---- Claude Code's user settings: the punchlist marketplace's auto-update ----
+
+/**
+ * `claude plugin marketplace add` (and `install --marketplace`) declare the marketplace in the user's
+ * settings without auto-update, so its copy, and the plugin installed from it, would stay at the
+ * version setup installed. A repo's own entry asks for auto-update, but the user's entry is the one
+ * Claude Code added. This turns auto-update on for punchlist's entry only.
+ */
+function userSettingsPath(penv: NodeJS.ProcessEnv, home: string) {
+  return join(penv.CLAUDE_CONFIG_DIR ?? join(home, '.claude'), 'settings.json');
 }
 
 // ---- The steps ----
@@ -276,8 +298,14 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
       const until = Date.now() + (env.waitMs ?? 10 * 60_000);
       while (!entry && Date.now() < until) {
         await new Promise(r => setTimeout(r, env.pollMs ?? 3_000));
-        me = await client.request<Me>('GET', '/v1/me'); // also has the server re-check installs
-        entry = find(me);
+        try {
+          me = await client.request<Me>('GET', '/v1/me'); // also has the server re-check installs
+          entry = find(me);
+        } catch (e) {
+          // A dropped connection while they're on GitHub: keep waiting. A revoked sign-in won't fix itself.
+          if (e instanceof ApiError && e.status === 401) break;
+          if (!(e instanceof NetworkError) && !(e instanceof ApiError && e.status >= 500)) throw e;
+        }
       }
     }
     const allowed = (me as Me & { allowedOwners?: string[] }).allowedOwners; // newer servers say who they serve
@@ -331,6 +359,12 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
   // 6. The plugin, installed and on for this folder
   let plugins: PluginEntry[] | null = null;
   let pluginChanged = false;
+  let pluginWasOn = false;
+  /** The plugin as it ends up for this folder. */
+  let installed: PluginEntry | undefined;
+  // Claude Code's copy of the marketplace, read once per run (after the refresh): each `claude` call is slow.
+  let market: MarketPlugin | null | undefined;
+  const marketNow = () => (market === undefined ? (market = root ? marketplacePlugin(env, root) : null) : market);
   if (!root) skip('plugin', 'Waiting on the repo');
   else {
     if (fix) {
@@ -346,13 +380,17 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
       offers.push('Open this repo in Claude Code and approve the Punchlist plugin when it asks.');
     } else {
       let here = pluginHere(plugins, root);
+      pluginWasOn = !!here;
+      installed = here;
       let failed: string | null = null;
-      const install = marketplacePlugin(env, root) ? INSTALL_FROM_MARKET_ARGS : INSTALL_ARGS;
+      const install = marketNow() ? INSTALL_FROM_MARKET_ARGS : INSTALL_ARGS;
       if (!here && fix) {
         try {
           (env.claude ?? runClaude)(install, root);
           plugins = listPlugins(env, root) ?? [];
           here = pluginHere(plugins, root);
+          installed = here;
+          market = undefined; // installing can add the marketplace
         } catch (e) {
           failed = (e as Error).message;
         }
@@ -365,7 +403,7 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
       } else if (!here) add({ id: 'plugin', state: 'action', summary: "The Punchlist plugin isn't on for this folder", next: `Run \`punch setup\` (it runs \`claude ${install.join(' ')}\`).` });
       else {
         // On, but older than the marketplace's: an old plugin can miss what setup needs (it had no `setup` before 0.4.0).
-        const latest = marketplacePlugin(env, root)?.version;
+        const latest = marketNow()?.version;
         if (latest && here.version && compareVersions(here.version, latest) < 0) {
           const args = updateArgs(here.scope ?? 'project');
           if (!fix) add({ id: 'plugin', state: 'action', summary: `The Punchlist plugin here is ${here.version}; ${latest} is out`, next: `Run \`punch setup\` (it runs \`claude ${args.join(' ')}\`).` });
@@ -373,6 +411,7 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
             try {
               (env.claude ?? runClaude)(args, root);
               const now = pluginHere(listPlugins(env, root) ?? [], root);
+              installed = now ?? here;
               if (now?.version && compareVersions(now.version, latest) >= 0) {
                 pluginChanged = true;
                 add({ id: 'plugin', state: 'fixed', summary: `Updated the Punchlist plugin from ${here.version} to ${now.version}` });
@@ -386,13 +425,38 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
       }
     }
   }
+  // PUNCH_PLUGIN_DATA is what the plugin's session start gives Claude's shell, so without it the plugin
+  // didn't load here: either it was off when the session started, or its session start failed.
   const restart = !penv.CLAUDECODE
     ? null
-    : !penv.PUNCH_PLUGIN_DATA
-      ? 'This Claude Code session started before the plugin was on, so it hasn’t loaded here. Tell the user to start a new Claude Code session in this repo: the board then appears at the start of every session.'
-      : pluginChanged
-        ? 'The plugin was just updated, and Claude Code loads the new version in the next session. Tell the user to start a new Claude Code session in this repo.'
-        : null;
+    : pluginChanged
+      ? 'The plugin was just installed or updated, and Claude Code loads it in the next session. Tell the user to start a new Claude Code session in this repo: the board then appears at the start of every session.'
+      : !penv.PUNCH_PLUGIN_DATA && pluginWasOn
+        ? "The plugin is on for this repo but didn't load in this Claude Code session, so its session start may have failed. Tell the user to start a new session; if the board still doesn't appear, its first message says why (for example, no Node.js 20 found)."
+        : !penv.PUNCH_PLUGIN_DATA
+          ? 'This Claude Code session started before the plugin was on, so it hasn’t loaded here. Tell the user to start a new Claude Code session in this repo: the board then appears at the start of every session.'
+          : null;
+
+  // 6b. Auto-update for the punchlist marketplace in Claude Code's user settings
+  {
+    const path = userSettingsPath(penv, home);
+    let user: Json | null = null;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      user = isObj(parsed) ? parsed : null;
+    } catch {
+      user = null; // none, or not JSON: leave it alone
+    }
+    const markets = user && isObj(user.extraKnownMarketplaces) ? user.extraKnownMarketplaces : null;
+    const entry = markets && isObj(markets.punchlist) ? markets.punchlist : null;
+    if (user && markets && entry && entry.autoUpdate !== true) {
+      if (!fix) add({ id: 'auto-update', state: 'action', summary: "The punchlist marketplace doesn't auto-update", next: `Run \`punch setup\` to turn on auto-update for the punchlist marketplace in ${path}.` });
+      else {
+        writeFileSync(path, `${JSON.stringify({ ...user, extraKnownMarketplaces: { ...markets, punchlist: { ...entry, autoUpdate: true } } }, null, 2)}\n`);
+        add({ id: 'auto-update', state: 'fixed', summary: 'Turned on auto-update for the punchlist marketplace, so the plugin keeps itself current' });
+      }
+    }
+  }
 
   // 7. The CLAUDE.md pointer
   let pointerChanged = false;
@@ -422,20 +486,32 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
   })();
   const shadow = terminalPunch(penv);
   if (env.link && !linked && root) {
-    const market = marketplacePlugin(env, root);
-    const target = market ? join(market.dir, 'bin', 'punch') : null;
+    const m = marketNow();
+    const target = m ? join(m.dir, 'bin', 'punch') : null;
     if (!target) add({ id: 'terminal', state: 'blocked', summary: "Couldn't find the plugin's launcher to link", next: 'Install the plugin first (`punch setup` does), then run `punch setup --link` again.' });
     else if (existsSync(linkPath)) add({ id: 'terminal', state: 'blocked', summary: `${linkPath} already exists`, next: `${linkPath} is something else, so setup won't replace it. Remove it, then run \`punch setup --link\` again.` });
     else {
       mkdirSync(localBin, { recursive: true });
       symlinkSync(target, linkPath);
-      add({ id: 'terminal', state: 'fixed', summary: `Linked ${linkPath} to the plugin's punch.${pathHint}` });
+      add({ id: 'terminal', state: 'fixed', summary: `Linked ${linkPath} to the plugin marketplace's punch.${pathHint}` });
     }
   } else if (linked) {
     const first = shadow && real(shadow) !== real(linkPath) ? shadow : null;
     if (first) offers.push(`A different \`punch\` at ${first} comes first on your PATH, ahead of ${linkPath}. If it's an old global install, remove it with \`npm rm -g @nnewberg/punchlist\`.`);
     else if (pathHint) offers.push(pathHint.trim());
-    add({ id: 'terminal', state: 'ok', summary: `\`punch\` in a terminal runs the plugin's version (${linkPath})` });
+    // The link runs the marketplace copy's launcher; the plugin is installed from that copy, and step 6
+    // updates the plugin whenever it's behind, so both pin the same CLI. Say so if they've drifted.
+    const pin = (dir: string) => {
+      try {
+        return readFileSync(join(dir, 'cli-version'), 'utf8').trim();
+      } catch {
+        return null;
+      }
+    };
+    const terminalPin = pin(dirname(dirname(real(linkPath))));
+    const pluginPin = installed?.installPath ? pin(installed.installPath) : null;
+    if (terminalPin && pluginPin && terminalPin !== pluginPin) offers.push(`\`punch\` in a terminal pins punch ${terminalPin}, but the plugin pins ${pluginPin}. Run \`punch setup\` again (without --check) to update the plugin.`);
+    add({ id: 'terminal', state: 'ok', summary: `\`punch\` in a terminal runs the plugin marketplace's punch (${linkPath})` });
   } else {
     const other = shadow && !isLauncher(shadow) ? ` It would replace the separate \`punch\` at ${shadow}, which can drift from the plugin's version (remove that with \`npm rm -g @nnewberg/punchlist\`).` : '';
     offers.push(`Run \`punch setup --link\` so \`punch\` works in a terminal too, running the same version as the plugin.${other}`);

@@ -335,4 +335,3 @@ a.gh-btn { text-decoration: none; }
 .setup-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .setup-hint { font-size: 12px; line-height: 1.5; color: var(--fg3); }
 .setup-row .btn { flex: none; }
-.setup-done { font-size: 13.5px; color: var(--ok); }

@@ -83,7 +83,8 @@ find_node() {
 node_bin=
 if [ -f "$data/node-path" ]; then
   node_bin=$(cat "$data/node-path")
-  [ -x "$node_bin" ] || node_bin=
+  # Gone, or replaced since it was chosen (an upgrade or a different install at that path): choose again.
+  if [ ! -x "$node_bin" ] || [ "$node_bin" -nt "$data/node-path" ]; then node_bin=; fi
 fi
 if [ -z "$node_bin" ]; then
   find_node

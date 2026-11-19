@@ -228,12 +228,14 @@ async function github(request: Request, env: Env, url: URL): Promise<Response> {
 
   // GitHub sends the installer here after they pick repos; sync that installation so its boards are
   // there when they land, even if the webhook is slow. Then show the prompt that sets up Claude Code.
+  // Someone who can't install it on an org only *requests* it (setup_action=request, no installation
+  // yet), so the page says it's waiting for an admin rather than that it's installed.
   if (url.pathname === '/github/setup' && request.method === 'GET') {
+    if (url.searchParams.get('setup_action') === 'request') return new Response(null, { status: 302, headers: { location: '/setup?requested=1' } });
     const id = Number(url.searchParams.get('installation_id'));
-    if (githubConfigured(env) && Number.isInteger(id) && id > 0) {
-      await reconcile(env, id).catch(e => console.error('setup sync failed', e));
-    }
-    return new Response(null, { status: 302, headers: { location: '/setup?installed=1' } });
+    if (!githubConfigured(env) || !Number.isInteger(id) || id <= 0) return new Response(null, { status: 302, headers: { location: '/setup' } });
+    const synced = await reconcile(env, id).then(() => true, e => (console.error('setup sync failed', e), false));
+    return new Response(null, { status: 302, headers: { location: synced ? '/setup?installed=1' : '/setup' } });
   }
 
   return notFound();

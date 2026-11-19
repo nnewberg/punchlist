@@ -249,4 +249,11 @@ describe('setting up a repo (PL-020)', () => {
     const repos = await env.DB.prepare('SELECT repo FROM boards WHERE installation_id = ? AND archived_at IS NULL').bind(INSTALL).all<{ repo: string }>();
     expect(repos.results.map(r => r.repo).sort()).toEqual(gh.repos.map(r => r.name).sort());
   });
+
+  it("doesn't say the App is installed when it was only requested, or there's no installation", async () => {
+    const asked = await call('/github/setup?setup_action=request', { redirect: 'manual' });
+    expect(asked.headers.get('location')).toBe('/setup?requested=1');
+    const none = await call('/github/setup', { redirect: 'manual' });
+    expect(none.headers.get('location')).toBe('/setup');
+  });
 });

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,7 @@ let repo: string;
 let home: string;
 let me: Record<string, unknown>;
 let meStatus = 200;
+let offline = 0;
 let meCalls = 0;
 let boardItems: unknown[] = [];
 
@@ -70,6 +71,7 @@ beforeEach(() => {
   git('remote', 'add', 'origin', 'git@github.com:nnewberg/punchlist-sandbox.git');
   me = { user: 'nick', boards: [board], people: {}, installUrl: 'https://github.com/apps/punchlist-board/installations/new', dev: false, allowedOwners: ['nnewberg', 'futureleisurefoundation'] };
   meStatus = 200;
+  offline = 0;
   meCalls = 0;
   boardItems = [{ id: 'PS-001', title: 'Geo filter', body: '', status: 'up_next', rank: 'a0', blocked: null, tags: [], depends_on: [], aliases: [], source: { kind: 'cli', actor: 'nick' }, created_at: '2026-10-01T00:00:00Z', created_by: 'nick', claim: null, citations: [], notes: [], body_version: 0, updated_at: '2026-10-01T00:00:00Z' }];
   plugins = [];
@@ -80,6 +82,7 @@ beforeEach(() => {
     const path = new URL(url).pathname;
     if (path === '/v1/me') {
       meCalls++;
+      if (meCalls > 1 && offline > 0 && offline--) throw new TypeError('fetch failed'); // the first call (sign-in) goes through
       return new Response(JSON.stringify(meStatus === 200 ? me : { error: 'unauthorized' }), { status: meStatus });
     }
     if (path === '/v1/boards/nnewberg/punchlist-sandbox') return new Response(JSON.stringify({ board: { owner: 'nnewberg', repo: 'punchlist-sandbox', prefix: 'PS' }, items: boardItems, seq: 1, viewers: [] }));
@@ -180,6 +183,22 @@ describe('punch setup', () => {
     expect(meCalls).toBeGreaterThan(1);
   });
 
+  it('keeps waiting through a dropped connection', async () => {
+    await signIn();
+    me.boards = [];
+    offline = 2;
+    let polled = 0;
+    const appear = setInterval(() => meCalls >= 4 && (me.boards = [board]), 5);
+    try {
+      const r = await setup({ waitBoard: true, pollMs: 10, waitMs: 2_000 });
+      polled = meCalls;
+      expect(step(r, 'board').state).toBe('ok');
+    } finally {
+      clearInterval(appear);
+    }
+    expect(polled).toBeGreaterThanOrEqual(4);
+  });
+
   it('gives up waiting with a clear message', async () => {
     await signIn();
     me.boards = [];
@@ -253,7 +272,9 @@ describe('punch setup', () => {
     await setup();
     git('add', '-A');
     git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'setup');
-    git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    git('update-ref', 'refs/remotes/develop-tip', 'HEAD');
+    git('update-ref', 'refs/remotes/origin/develop', 'HEAD');
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
     const r = await setup();
     expect(r.offers.join('\n')).not.toMatch(/open a PR|not on/);
   });
@@ -284,8 +305,57 @@ describe('punch setup', () => {
     expect(step(checked, 'plugin')).toMatchObject({ state: 'action', summary: 'The Punchlist plugin here is 0.3.3; 0.4.0 is out' });
     const r = await setup({ env: { PATH: '/usr/bin:/bin', CLAUDECODE: '1', PUNCH_PLUGIN_DATA: '/x' } });
     expect(step(r, 'plugin')).toMatchObject({ state: 'fixed', summary: 'Updated the Punchlist plugin from 0.3.3 to 0.4.0' });
-    expect(r.restart).toMatch(/just updated.*new Claude Code session/);
+    expect(r.restart).toMatch(/just installed or updated.*new Claude Code session/);
     expect(step(await setup(), 'plugin').state).toBe('ok');
+  });
+
+  it('turns on auto-update for the punchlist marketplace in Claude Code’s user settings, and nothing else', async () => {
+    await signIn();
+    const path = join(home, '.claude', 'settings.json');
+    mkdirSync(join(home, '.claude'));
+    const user = { theme: 'dark', extraKnownMarketplaces: { punchlist: { source: { source: 'github', repo: 'nnewberg/punchlist' } }, other: { source: { source: 'github', repo: 'x/y' } } } };
+    writeFileSync(path, JSON.stringify(user));
+    const checked = await setup({ check: true });
+    expect(step(checked, 'auto-update').state).toBe('action');
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(user);
+    expect(step(await setup(), 'auto-update').state).toBe('fixed');
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ ...user, extraKnownMarketplaces: { ...user.extraKnownMarketplaces, punchlist: { ...user.extraKnownMarketplaces.punchlist, autoUpdate: true } } });
+    expect((await setup()).steps.find(s => s.id === 'auto-update')).toBeUndefined();
+  });
+
+  it('leaves user settings alone when they don’t declare the punchlist marketplace', async () => {
+    await signIn();
+    mkdirSync(join(home, '.claude'));
+    writeFileSync(join(home, '.claude', 'settings.json'), '{"theme":"dark"}');
+    expect((await setup()).steps.find(s => s.id === 'auto-update')).toBeUndefined();
+    expect(readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).toBe('{"theme":"dark"}');
+  });
+
+  it('says the session start may have failed when the plugin was already on but did not load', async () => {
+    await signIn();
+    plugins = [{ id: 'punchlist@punchlist', version: '0.4.0', scope: 'project', enabled: true, projectPath: repo, projectEnabled: true }];
+    const r = await setup({ env: { PATH: '/usr/bin:/bin', CLAUDECODE: '1' } });
+    expect(r.restart).toMatch(/didn't load in this Claude Code session.*session start may have failed/);
+  });
+
+  it('reads the marketplace once per run', async () => {
+    await signIn();
+    market('0.4.0');
+    plugins = [{ id: 'punchlist@punchlist', version: '0.4.0', scope: 'project', enabled: true, projectPath: repo, projectEnabled: true }];
+    await setup({ link: true });
+    expect(claudeCalls.filter(a => a.join(' ') === 'plugin marketplace list --json')).toHaveLength(1);
+  });
+
+  it('says when the terminal link and the plugin pin different CLIs', async () => {
+    await signIn();
+    const bin = market('0.4.2');
+    const installPath = mkdtempSync(join(tmpdir(), 'cache-'));
+    writeFileSync(join(installPath, 'cli-version'), '0.4.1\n');
+    plugins = [{ id: 'punchlist@punchlist', version: '0.4.2', scope: 'project', enabled: true, projectPath: repo, projectEnabled: true, installPath }];
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    symlinkSync(join(bin, 'punch'), join(home, '.local', 'bin', 'punch'));
+    const r = await setup({ check: true });
+    expect(r.offers.join('\n')).toMatch(/pins punch 0\.4\.2, but the plugin pins 0\.4\.1/);
   });
 
   it('compares versions by number', () => {

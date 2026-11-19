@@ -482,6 +482,7 @@ async function run() {
     }
 
     case 'setup': {
+      if (o.board) throw new UsageError('punch setup works on the repo you run it in, so it doesn’t take --board. cd into that repo and run it there.');
       const report = await runSetup({ url, cwd: process.cwd(), version: VERSION, check: !!o.check, link: !!o.link, waitBoard: !!o['wait-board'] });
       if (o.json) printJson(report);
       else print(formatSetup(report));

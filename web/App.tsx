@@ -49,7 +49,7 @@ export function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/setup" element={<div className="app"><Header title="" boards={me.boards} me={me.user} query="" onQuery={() => {}} /><SetupPage /></div>} />
+        <Route path="/setup" element={<div className="app"><Header title="" boards={me.boards} me={me.user} query="" onQuery={() => {}} /><SetupPage allowedOwners={me.allowedOwners ?? []} /></div>} />
         {me.boards.length === 0 ? (
           <Route path="*" element={<div className="app"><Header title="" boards={[]} me={me.user} query="" onQuery={() => {}} /><NoBoards installUrl={me.installUrl} /></div>} />
         ) : (

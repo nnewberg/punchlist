@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -113,6 +113,19 @@ describe('the plugin launcher', () => {
     const r = run(['list']);
     expect(r.log.match(/^npm /gm)).toHaveLength(1);
     expect(r.log.match(/^ran /gm)).toHaveLength(2);
+  });
+
+  it('chooses again when the remembered node is replaced, and won\'t keep one that became too old', () => {
+    const brew = join(home, 'brew');
+    fakeNode(brew, 22);
+    const env = { PUNCH_SYSTEM_NODES: join(brew, 'node') };
+    expect(run(['list'], env).code).toBe(0);
+    // Something else installs an older node at the same path, after punch chose it.
+    utimesSync(join(home, 'data/node-path'), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    fakeNode(brew, 18);
+    const r = run(['list'], env);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(`${join(brew, 'node')} (Node 18)`);
   });
 
   it('works behind a symlink, with its own folder outside Claude Code', () => {
