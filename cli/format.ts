@@ -1,3 +1,4 @@
+import { attachmentIds } from '../shared/attachments';
 import { age, isRecentDone, openDeps } from '../shared/derive';
 import { shortSha } from '../shared/github';
 import { columnItems, STATUS_LABEL } from '../shared/ops';
@@ -132,6 +133,8 @@ export function formatShow(it: Item, items: ReadonlyMap<string, Item>, history: 
     out.push(c.dim(`${ci.kind === 'closes' ? 'closed by' : 'fix pending on'} ${refs}${ci.how === 'branch' ? ' (via branch)' : ci.how === 'inferred' ? ' (inferred)' : ''}`));
   }
   if (it.body.trim()) out.push('', it.body.trim());
+  const images = attachmentIds(it.body).length;
+  if (images) out.push(c.dim(`(${images === 1 ? '1 image' : `${images} images`}: \`punch images ${it.id}\` saves ${images === 1 ? 'it' : 'them'} as files)`));
   if (it.notes.length) {
     out.push('', c.bold('Notes'));
     for (const n of [...it.notes].reverse()) out.push(`  ${c.dim(`${n.actor} · ${age(n.at)}`)}  ${n.text}${n.commit ? c.dim(` (${[shortSha(n.commit), n.pr ? `PR #${n.pr}` : ''].filter(Boolean).join(', ')})`) : ''}`);

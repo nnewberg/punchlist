@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { attachmentId, MAX_IMAGE_BYTES, sniffImage, type Attachment } from '../shared/attachments';
 import { BUILD_ID } from '../shared/build';
 import { checkImport, importedItem } from '../shared/import';
 import { applyOp, claimFor, columnItems, idKey, inversePatch, rankFor, resolveId } from '../shared/ops';
@@ -48,6 +49,8 @@ interface EventRow extends Record<string, SqlStorageValue> {
 }
 
 const RESYNC_AFTER = 500;
+/** How much of an attached image goes in one row. */
+const FILE_CHUNK = 1024 * 1024;
 /** How long a webhook delivery ID is remembered, to ignore GitHub's repeats (FR-29). */
 const DELIVERY_TTL_MS = 30 * 86400_000;
 /** How long the board trusts its list of who can be assigned, and how long it waits for D1 to read it. */
@@ -98,6 +101,9 @@ export class BoardDO extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS gh_commits (sha TEXT PRIMARY KEY, pr INTEGER, merge INTEGER NOT NULL DEFAULT 0, on_default INTEGER NOT NULL DEFAULT 0)`);
     // Claude sessions' last heartbeats, for session claims' lapse (FR-28).
     this.sql.exec(`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user TEXT NOT NULL, last_seen INTEGER NOT NULL)`);
+    // Attached images (PL-001), split into chunks because a row holds at most 2 MB.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, type TEXT NOT NULL, size INTEGER NOT NULL, at TEXT NOT NULL, by TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS file_chunks (id TEXT NOT NULL, n INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (id, n))`);
     for (const r of this.sql.exec<{ id: string; last_seen: number }>(`SELECT id, last_seen FROM sessions`)) {
       this.seen.set(r.id, { at: r.last_seen, stored: r.last_seen });
     }
@@ -313,6 +319,44 @@ export class BoardDO extends DurableObject<Env> {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  // ---- Attached images (PL-001) ----
+
+  /**
+   * Keeps an image for this board and returns its id. Uploading changes nothing on the board by
+   * itself: the description edit that points at it is the change, and undoing that leaves the image.
+   * The Worker has checked who may upload and refused anything but an image; this checks again.
+   */
+  async putFile(info: BoardInfo, data: ArrayBuffer, actor: Actor): Promise<Attachment> {
+    this.ensure(info);
+    const bytes = new Uint8Array(data);
+    const type = sniffImage(bytes);
+    if (!type || bytes.length > MAX_IMAGE_BYTES) throw new Error('not an image the board keeps');
+    const id = await attachmentId(bytes);
+    if (!this.sql.exec(`SELECT 1 FROM files WHERE id = ?`, id).toArray().length) {
+      this.ctx.storage.transactionSync(() => {
+        for (let n = 0; n * FILE_CHUNK < bytes.length; n++) {
+          this.sql.exec(`INSERT INTO file_chunks (id, n, data) VALUES (?, ?, ?)`, id, n, bytes.slice(n * FILE_CHUNK, (n + 1) * FILE_CHUNK).buffer);
+        }
+        this.sql.exec(`INSERT INTO files (id, type, size, at, by) VALUES (?, ?, ?, ?, ?)`, id, type, bytes.length, new Date().toISOString(), actor.user ?? 'github');
+      });
+    }
+    return { id, type, size: bytes.length };
+  }
+
+  /** An attached image's bytes, or null if this board has no image with that id. */
+  getFile(info: BoardInfo, id: string): { type: string; data: Uint8Array } | null {
+    this.ensure(info);
+    const file = this.sql.exec<{ type: string; size: number }>(`SELECT type, size FROM files WHERE id = ?`, id).toArray()[0];
+    if (!file) return null;
+    const data = new Uint8Array(file.size);
+    let at = 0;
+    for (const r of this.sql.exec<{ data: ArrayBuffer }>(`SELECT data FROM file_chunks WHERE id = ? ORDER BY n`, id)) {
+      data.set(new Uint8Array(r.data), at);
+      at += r.data.byteLength;
+    }
+    return { type: file.type, data };
   }
 
   // ---- Import (PRD §7.9) ----

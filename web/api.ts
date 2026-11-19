@@ -1,3 +1,4 @@
+import { attachmentOf, type Attachment } from '../shared/attachments';
 import type { BoardInfo } from '../shared/types';
 
 // DEV STUB: `?as=<user>` picks who this tab is (see worker/identity.ts). Kept per tab in sessionStorage
@@ -38,6 +39,24 @@ export function wsUrl(path: string): string {
 
 export const boardPath = (b: Pick<BoardInfo, 'owner' | 'repo'>) => `/${b.owner}/${b.repo}`;
 export const boardApi = (b: Pick<BoardInfo, 'owner' | 'repo'>) => `/v1/boards/${encodeURIComponent(b.owner)}/${encodeURIComponent(b.repo)}`;
+
+/** Where an `attachment:` URL in a description is served from on this board (PL-001); other URLs are left alone. */
+export function attachmentUrl(b: Pick<BoardInfo, 'owner' | 'repo'>, url: string): string | null {
+  const id = attachmentOf(url);
+  if (!id) return null;
+  // An <img> can't send the dev header, so the dev person goes in the query, as on the WebSocket.
+  return `${boardApi(b)}/files/${id}${devUser ? `?as=${encodeURIComponent(devUser)}` : ''}`;
+}
+
+/** Uploads an image to attach to this board. Throws with the server's reason when it's refused. */
+export async function uploadImage(b: Pick<BoardInfo, 'owner' | 'repo'>, file: Blob): Promise<Attachment> {
+  const headers = new Headers({ 'content-type': file.type || 'application/octet-stream' });
+  if (devUser) headers.set('X-Punch-Dev-User', devUser);
+  const res = await fetch(`${boardApi(b)}/files`, { method: 'POST', body: file, headers });
+  const body = (await res.json().catch(() => null)) as (Attachment & { error?: { message?: string } }) | null;
+  if (!res.ok) throw new Error(body?.error?.message ?? (res.status === 413 ? 'That image is too big.' : `Couldn’t upload it (HTTP ${res.status}).`));
+  return body!;
+}
 
 import type { Me } from '../shared/types';
 export type { Me };

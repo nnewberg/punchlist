@@ -41,6 +41,8 @@ export const COMMAND_FLAGS: Record<string, string[]> = {
   show: [],
   add: ['body', 'body-file', 'status', 'tag', 'deferred'],
   edit: ['title', 'body', 'body-file'],
+  attach: [],
+  images: ['out'],
   search: [],
   move: ['top', 'before'],
   start: ['steal'],

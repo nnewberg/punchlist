@@ -14,6 +14,8 @@ A shared, live TODO board for each repo that keeps itself up to date. See [PRD.m
   - claims what it works on, and won't take what someone else holds
   - files work it leaves for later
 
+- Images in an item's description: paste, drop or pick one on the web, or `punch attach`; `punch images` brings them back as files for Claude to look at.
+
 - `punch import`: a repo's old tracking, translated once into Punchlist's item shape, imported after a dry run with its IDs kept.
 
 **Not built yet:** inferred closes.

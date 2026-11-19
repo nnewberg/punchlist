@@ -15,6 +15,8 @@ punch list --compact   # the board for this repo, found from `origin`
 | `show ID` | one item, with notes and history |
 | `add "title" [-b body \| --body-file path] [-s status] [-t tag] [--deferred]` | add an item (`--body-file -` reads stdin); `--deferred` marks work Claude left for later |
 | `edit ID [--title "title"] [-b body \| --body-file path]` | retitle it or replace its description (`--body-file -` reads stdin). If someone changed the description since you read it, nothing is saved and you're told who |
+| `attach ID FILE...` | add images (PNG, JPEG, GIF, WebP; up to 10 MB each) to the end of its description |
+| `images ID [-o dir]` | save the images in its description as files, and print their paths (how an agent looks at a screenshot) |
 | `search "words"` | the closest items, including Done in the last 30 days (the duplicate check) |
 | `move ID status [--top \| --before ID]` | move it |
 | `start ID [--steal]` / `release ID` | claim it, or give it back |

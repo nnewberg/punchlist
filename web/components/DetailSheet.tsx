@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Markdown from 'react-markdown';
+import Markdown, { defaultUrlTransform } from 'react-markdown';
+import { altFor, appendImage, IMAGE_TYPES, imageMarkdown, MAX_IMAGE_BYTES, MAX_IMAGE_LABEL } from '../../shared/attachments';
 import { person } from '../../shared/config';
 import { age, openDeps, workBranch } from '../../shared/derive';
 import { githubUrl, shortSha } from '../../shared/github';
 import { STATUS_LABEL } from '../../shared/ops';
 import { COLUMNS, type BoardEvent, type BoardInfo, type Column, type Item, type Op, type OpError } from '../../shared/types';
-import { api, boardApi } from '../api';
+import { api, attachmentUrl, boardApi, uploadImage } from '../api';
 import type { BoardClient } from '../boardClient';
 import { Avatar, ChevronIcon, CloseIcon, Field, Glyph, InlineInput, TrashIcon, useDismiss } from './ui';
 
@@ -93,7 +94,7 @@ export function DetailSheet({ item, items, board, client, onClose, onOpen, onDel
             </div>
           )}
           <Title item={item} readOnly={ro} onSave={title => send({ op: 'edit', id: item.id, title })} />
-          <Body item={item} client={client} readOnly={ro} />
+          <Body item={item} board={board} client={client} readOnly={ro} />
 
           <div className="fields">
             <Field label="Status">
@@ -338,24 +339,88 @@ function Title({ item, onSave, readOnly }: { item: Item; onSave: (t: string) => 
   );
 }
 
+/** A description: Markdown, with attached images served from the board, each opening full size in a new tab. */
+function Md({ text, board }: { text: string; board: BoardInfo }) {
+  return (
+    <Markdown
+      urlTransform={url => attachmentUrl(board, url) ?? defaultUrlTransform(url)}
+      components={{
+        img: ({ src, alt }) => (
+          <a className="md-img" href={typeof src === 'string' ? src : undefined} target="_blank" rel="noreferrer">
+            <img src={typeof src === 'string' ? src : undefined} alt={alt ?? ''} loading="lazy" />
+          </a>
+        ),
+      }}
+    >
+      {text}
+    </Markdown>
+  );
+}
+
+const isImage = (f: File) => (IMAGE_TYPES as readonly string[]).includes(f.type);
+let uploads = 0;
+
 // Body edits carry the version they started from; if someone else saved in between, show their text
-// and keep this draft rather than dropping it (FR-8).
-function Body({ item, client, readOnly }: { item: Item; client: BoardClient; readOnly: boolean }) {
+// and keep this draft rather than dropping it (FR-8). Images pasted, dropped or picked are uploaded to
+// the board and land in the draft as Markdown (PL-001); the draft can't be saved until they're in.
+function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo; client: BoardClient; readOnly: boolean }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [base, setBase] = useState(item.body_version);
   const [conflict, setConflict] = useState<Extract<OpError, { code: 'conflict' }> | null>(null);
+  const [uploading, setUploading] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setDraft(null);
     setConflict(null);
+    setUploadError(null);
   }, [item.id]);
 
   const start = () => {
     setDraft(item.body);
     setBase(item.body_version);
   };
+
+  /** Uploads the images among `files`, each shown in the draft as uploading until it's in. Returns whether there were any. */
+  const attach = (files: File[], where: 'cursor' | 'end' = 'cursor') => {
+    const images = files.filter(isImage);
+    if (!images.length) {
+      if (files.length) setUploadError('Only PNG, JPEG, GIF and WebP images can be attached.');
+      return false;
+    }
+    setUploadError(null);
+    const ta = textarea.current;
+    for (const file of images) {
+      const alt = altFor(file.name);
+      if (file.size > MAX_IMAGE_BYTES) {
+        setUploadError(`${file.name} is over ${MAX_IMAGE_LABEL}.`);
+        continue;
+      }
+      const token = `![Uploading ${alt}…](uploading:${++uploads})`;
+      setDraft(d => {
+        const text = d ?? item.body;
+        if (where === 'end' || !ta) return appendImage(text, token);
+        // On a line of its own, so it shows as a block between paragraphs.
+        const before = text.slice(0, ta.selectionStart), after = text.slice(ta.selectionEnd);
+        return `${before}${before && !before.endsWith('\n') ? '\n\n' : ''}${token}${after && !after.startsWith('\n') ? '\n\n' : ''}${after}`;
+      });
+      setUploading(n => n + 1);
+      uploadImage(board, file).then(
+        att => setDraft(d => d?.replace(token, imageMarkdown(alt, att.id)) ?? d),
+        (e: Error) => {
+          setDraft(d => d?.replace(token, '') ?? d);
+          setUploadError(e.message);
+        },
+      ).finally(() => setUploading(n => n - 1));
+    }
+    return true;
+  };
+  const filesIn = (dt: DataTransfer | null) => [...(dt?.files ?? [])];
+
   const save = async (version = base) => {
-    if (draft === null) return;
+    if (draft === null || uploading) return;
     const r = await client.send({ op: 'edit', id: item.id, body: draft, baseBodyVersion: version });
     if (r.ok) {
       setDraft(null);
@@ -364,12 +429,23 @@ function Body({ item, client, readOnly }: { item: Item; client: BoardClient; rea
   };
 
   if (readOnly) {
-    return item.body.trim() ? <div className="body-view ro"><div className="md"><Markdown>{item.body}</Markdown></div></div> : null;
+    return item.body.trim() ? <div className="body-view ro"><div className="md"><Md text={item.body} board={board} /></div></div> : null;
   }
   if (draft === null) {
     return (
-      <div className="body-view" onClick={e => !(e.target instanceof HTMLAnchorElement) && start()} title="Click to edit">
-        {item.body.trim() ? <div className="md"><Markdown>{item.body}</Markdown></div> : <div className="md empty">Add a description…</div>}
+      <div
+        className="body-view"
+        onClick={e => !(e.target as Element).closest('a') && start()}
+        onDragOver={e => e.dataTransfer.types.includes('Files') && e.preventDefault()}
+        onDrop={e => {
+          if (!filesIn(e.dataTransfer).length) return;
+          e.preventDefault();
+          start();
+          attach(filesIn(e.dataTransfer), 'end');
+        }}
+        title="Click to edit, or drop an image here"
+      >
+        {item.body.trim() ? <div className="md"><Md text={item.body} board={board} /></div> : <div className="md empty">Add a description…</div>}
       </div>
     );
   }
@@ -387,10 +463,22 @@ function Body({ item, client, readOnly }: { item: Item; client: BoardClient; rea
         </div>
       )}
       <textarea
+        ref={textarea}
         autoFocus
         data-not-draft
         value={draft}
         onChange={e => setDraft(e.target.value)}
+        onPaste={e => {
+          // A screenshot pastes as an image alone; something copied with text (a document, a web page) pastes as its text.
+          if (e.clipboardData.types.includes('text/plain')) return;
+          if (attach(filesIn(e.clipboardData))) e.preventDefault();
+        }}
+        onDragOver={e => e.dataTransfer.types.includes('Files') && e.preventDefault()}
+        onDrop={e => {
+          if (!filesIn(e.dataTransfer).length) return;
+          e.preventDefault();
+          attach(filesIn(e.dataTransfer));
+        }}
         onKeyDown={e => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save();
           if (e.key === 'Escape') {
@@ -399,11 +487,25 @@ function Body({ item, client, readOnly }: { item: Item; client: BoardClient; rea
             setConflict(null);
           }
         }}
-        placeholder="Markdown — one line or a full spec"
+        placeholder="Markdown — one line or a full spec. Paste or drop images in."
       />
+      {uploadError && <div className="upload-error">{uploadError}<button className="btn-link" onClick={() => setUploadError(null)}>Dismiss</button></div>}
       <div className="row">
-        <button className="btn btn-accent" onClick={() => save()}>Save</button>
-        <button className="btn" onClick={() => (setDraft(null), setConflict(null))}>Cancel</button>
+        <button className="btn btn-accent" disabled={!!uploading} onClick={() => save()}>{uploading ? 'Uploading…' : 'Save'}</button>
+        <button className="btn" onClick={() => (setDraft(null), setConflict(null), setUploadError(null))}>Cancel</button>
+        <button className="btn" onClick={() => picker.current?.click()}>Attach image</button>
+        <input
+          ref={picker}
+          type="file"
+          accept={IMAGE_TYPES.join(',')}
+          multiple
+          hidden
+          onChange={e => {
+            attach([...(e.currentTarget.files ?? [])]);
+            e.currentTarget.value = '';
+            textarea.current?.focus();
+          }}
+        />
         <span style={{ fontSize: 11, color: 'var(--fg3)' }}>⌘⏎ to save · Markdown</span>
       </div>
     </div>

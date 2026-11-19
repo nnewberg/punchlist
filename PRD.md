@@ -250,6 +250,10 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 - **FR-12 Inline editing.**
   - Add a card in any column.
   - Edit the title and body (markdown).
+  - Attach images to the body (PL-001): paste a screenshot, drop a file, or pick one. Each is uploaded to the board and lands in the body as `![alt](attachment:<id>)`, which names no repo, so a rename doesn't break it.
+    - PNG, JPEG, GIF and WebP, up to 10 MB, known by their bytes rather than their name. No SVG, since it can carry script.
+    - Kept in the board's Durable Object, split into 1 MB rows, so an image is seen by exactly who can see the board and needs no other storage. An id is the image's SHA-256, so the same image uploaded twice is kept once.
+    - Uploading changes nothing on the board by itself; the body edit that points at the image is the change. Undoing that edit leaves the image (§6.1: nothing is destroyed).
   - Add notes, tags and dependencies.
   - Set or clear Blocked, with a reason.
   - Drop an item.
@@ -533,6 +537,7 @@ The sandbox runs on the production Worker, not a staging copy. Boards are isolat
 - 0.3.1 (2026-10-16) adds `edit`, for a title or description. FR-17 had left it out, so Claude could only add notes to an item whose title or body had gone stale. A description edit sends the version it was based on, and a change made in between is refused, as on the web board (FR-8).
 - 0.3.2 (2026-10-22) adds `assign ID login`, which gives an item to someone who can edit the board, as the web sheet's Assignee menu does (PL-006). It needs a server with PL-006 deployed: an older one ignores the login and claims the item for you, which `punch assign` reports as a failure, with the `punch release` that undoes it. It also lists notes newest-first in `show` (PL-012). The plugin runs 0.3.2.
 - 0.3.3 (2026-11-04) makes `add` read `--body-file` (`-` for stdin), as `edit` does. 0.3.2 accepted it and ignored it, so items Claude filed that way on bulletin-bee had no description (PL-017). A command now refuses any flag it doesn't use, with a usage error, so no other flag can be dropped silently the same way. The plugin runs 0.3.3.
+- 0.5.0 (2026-11-19) adds `attach ID FILE...`, which uploads images to the end of an item's description, and `images ID [-o dir]`, which saves a description's images as files and prints where, so Claude can look at them (PL-001). `show` says when an item has images. It needs a server with PL-001 deployed.
 
 **UI words**
 - The `dropped` status is shown as **Delete** (trash icon, Undo toast). It's still the soft delete from §6.1, and the CLI command keeps the name `drop`.
