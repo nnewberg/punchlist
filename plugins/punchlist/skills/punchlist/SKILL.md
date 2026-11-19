@@ -70,10 +70,11 @@ punch start ID
 - **Someone else has it.** `punch start` fails with `<Name> already has ID`. Stop and tell the user who has it. Don't start the work, and don't take it over unless the user says so. Then use `punch start ID --steal`, which is logged.
 - **"Your other Claude session has ID".** The same person already has a session on it. Tell the user and ask before stealing.
 - **It's held by the user's own branch.** The claim stays the branch's. That's fine; carry on.
+- **It's assigned to the user but not started.** `punch start` moves it to In Progress and it stays assigned to them. Carry on.
 
 The claim lasts while this session is in use. It's released when the session ends, and lapses after 2 hours with no activity. If you stop working on an item before then without finishing it, run `punch release ID`.
 
-To hand an item to someone else, when the user asks, run `punch assign ID login` (their GitHub login). It becomes their claim and moves to In Progress. Only people who can edit the board can be assigned. If someone else holds it, it fails; reassign only if the user says so, with `--steal`. `punch release ID` unassigns.
+To hand an item to someone else, when the user asks, run `punch assign ID login` (their GitHub login). It becomes theirs and stays in its column until they start it; an item assigned to someone else is theirs, so don't `punch start` it unless the user says so. Only people who can edit the board can be assigned. If someone else holds it, it fails; reassign only if the user says so, with `--steal`. `punch release ID` unassigns.
 
 ## Notes
 

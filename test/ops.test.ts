@@ -90,13 +90,13 @@ describe('applyOp', () => {
     const editors = new Map<string, string | null>([['nick', 'Nick Newberg'], ['aaron', 'Aaron Smith'], ['kevin', null]]); // no name: shown as person() shows them
     const text = (res: ReturnType<ReturnType<typeof board>['run']>) => (res.ok && !res.noop ? res.meta.text : res);
 
-    it('is a hand-made claim for them that starts the item, like their own claim', () => {
+    it('is a hand-made claim for them that leaves the item in its column (PL-024)', () => {
       const b = board();
       b.run({ op: 'create', title: 'x', status: 'up_next' });
       expect(text(b.run({ op: 'claim', id: 'PL-001', user: '@Aaron' }, nick, editors))).toBe('Assigned to Aaron Smith');
       const it = b.items.get('PL-001')!;
       expect(it.claim).toMatchObject({ user: 'aaron', kind: 'manual' });
-      expect(it.status).toBe('in_progress');
+      expect(it.status).toBe('up_next');
       // Assigning whoever already has it changes nothing.
       expect(b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors)).toMatchObject({ ok: true, noop: true });
     });
@@ -105,7 +105,7 @@ describe('applyOp', () => {
       const b = board();
       b.run({ op: 'create', title: 'x', status: 'up_next' });
       b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, { user: 'nick', via: 'claude', session: 's1' }, editors);
-      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', since: expect.any(String) });
+      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', assigned: true, since: expect.any(String) });
     });
 
     it('makes a Claude session’s claim, which lapses, a lasting one for that person', () => {
@@ -113,7 +113,7 @@ describe('applyOp', () => {
       b.run({ op: 'create', title: 'x', status: 'up_next' });
       b.run({ op: 'claim', id: 'PL-001' }, { user: 'aaron', via: 'claude', session: 's1' });
       expect(text(b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors))).toBe('Assigned to Aaron Smith');
-      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', since: expect.any(String) });
+      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', assigned: true, since: expect.any(String) });
     });
 
     it('releasing someone else’s claim reads as unassigning them; your own, as releasing it', () => {
@@ -125,11 +125,58 @@ describe('applyOp', () => {
       expect(text(b.run({ op: 'release', id: 'PL-001' }, nick))).toBe('Released');
     });
 
-    it('naming yourself is an ordinary claim', () => {
+    it('naming yourself assigns it to you without starting it, even from a Claude session', () => {
+      const b = board();
+      b.run({ op: 'create', title: 'x', status: 'backlog' });
+      expect(text(b.run({ op: 'claim', id: 'PL-001', user: 'Nick' }, { user: 'nick', via: 'claude', session: 's1' }))).toBe('Assigned to Nick');
+      expect(b.items.get('PL-001')!).toMatchObject({ status: 'backlog', claim: { user: 'nick', kind: 'manual' } });
+    });
+
+    it('stays assigned until its assignee starts it, which keeps it theirs; someone else needs steal', () => {
       const b = board();
       b.run({ op: 'create', title: 'x', status: 'up_next' });
-      expect(text(b.run({ op: 'claim', id: 'PL-001', user: 'Nick' }, nick))).toBe('Started');
-      expect(b.items.get('PL-001')!.claim?.user).toBe('nick');
+      b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors);
+      b.run({ op: 'move', id: 'PL-001', status: 'backlog' }, nick);
+      expect(b.items.get('PL-001')!.claim?.user).toBe('aaron');
+      const refused = b.run({ op: 'claim', id: 'PL-001' }, nick, editors);
+      expect(!refused.ok && refused.error).toMatchObject({ code: 'claimed', message: 'Aaron Smith already has PL-001' });
+      // Aaron's Claude session starts it: it moves, and stays a lasting claim rather than a session's.
+      const started = b.run({ op: 'claim', id: 'PL-001' }, { user: 'aaron', via: 'claude', session: 's1' });
+      expect(started.ok && !started.noop && started.meta.text).toBe('Started');
+      expect(b.items.get('PL-001')!).toMatchObject({ status: 'in_progress', claim: { user: 'aaron', kind: 'manual' } });
+      expect(b.run({ op: 'claim', id: 'PL-001' }, { user: 'aaron', via: 'claude', session: 's1' })).toMatchObject({ ok: true, noop: true });
+    });
+
+    it('keeps an assignment when its assignee starts it by a branch push or with --steal', () => {
+      const b = board();
+      b.run({ op: 'create', title: 'x', status: 'up_next' });
+      b.run({ op: 'create', title: 'y', status: 'up_next' });
+      b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors);
+      b.run({ op: 'claim', id: 'PL-002', user: 'aaron' }, nick, editors);
+      b.run({ op: 'claim', id: 'PL-001', kind: 'branch', ref: 'aaron/pl-001-x' }, { user: 'aaron', via: 'github' });
+      expect(b.items.get('PL-001')!).toMatchObject({ status: 'in_progress', claim: { user: 'aaron', kind: 'manual', assigned: true } });
+      // So the branch ending unmerged doesn't take the assignment with it.
+      expect(b.run({ op: 'branch_end', id: 'PL-001', branch: 'aaron/pl-001-x' }, { user: 'aaron', via: 'github' })).toMatchObject({ ok: true, noop: true });
+      b.run({ op: 'claim', id: 'PL-002', steal: true }, { user: 'aaron', via: 'claude', session: 's1' });
+      expect(b.items.get('PL-002')!).toMatchObject({ status: 'in_progress', claim: { user: 'aaron', kind: 'manual', assigned: true } });
+    });
+
+    it('keeps an assignment when it is moved back out of In Progress; any other claim ends', () => {
+      const b = board();
+      b.run({ op: 'create', title: 'x', status: 'up_next' });
+      b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors);
+      b.run({ op: 'move', id: 'PL-001', status: 'in_progress' }, aaron);
+      b.run({ op: 'move', id: 'PL-001', status: 'up_next' }, aaron);
+      expect(b.items.get('PL-001')!.claim).toMatchObject({ user: 'aaron', kind: 'manual' });
+      b.run({ op: 'create', title: 'y', status: 'up_next' });
+      b.run({ op: 'claim', id: 'PL-002' }, { user: 'nick', via: 'claude', session: 's1' });
+      b.run({ op: 'move', id: 'PL-002', status: 'up_next' }, nick);
+      expect(b.items.get('PL-002')!.claim).toBeNull();
+      // Dragging a card into In Progress and back out isn't an assignment either (FR-11).
+      b.run({ op: 'move', id: 'PL-002', status: 'in_progress' }, nick);
+      expect(b.items.get('PL-002')!.claim).toMatchObject({ user: 'nick', kind: 'manual' });
+      b.run({ op: 'move', id: 'PL-002', status: 'up_next' }, nick);
+      expect(b.items.get('PL-002')!.claim).toBeNull();
     });
 
     it('hands over your own claim freely; taking a third person’s needs steal and is recorded (FR-27)', () => {
@@ -141,8 +188,11 @@ describe('applyOp', () => {
       expect(!refused.ok && refused.error).toMatchObject({ code: 'claimed', message: 'Aaron Smith already has PL-001' });
       expect(text(b.run({ op: 'claim', id: 'PL-001', user: 'kevin', steal: true }, nick, editors))).toBe('Reassigned from Aaron Smith to Kevin');
       expect(b.items.get('PL-001')!.claim?.user).toBe('kevin');
-      // Taking it yourself reads as it does today.
+      // Taking it yourself to work on reads as it does today.
       expect(text(b.run({ op: 'claim', id: 'PL-001', steal: true }, nick, editors))).toBe('Took over from Kevin');
+      // Assigning it to yourself reads as a reassignment.
+      b.run({ op: 'claim', id: 'PL-001', user: 'kevin', steal: true }, nick, editors);
+      expect(text(b.run({ op: 'claim', id: 'PL-001', user: 'nick', steal: true }, nick, editors))).toBe('Reassigned from Kevin to Nick Newberg');
     });
 
     it('refuses someone who cannot edit the board, or anyone when the editors are unknown', () => {
