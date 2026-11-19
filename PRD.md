@@ -323,7 +323,7 @@ All three use Claude Code, so the plugin is the main way to interact with the bo
 - **FR-28 Claim lifetime:**
   - Session claims expire after a TTL with no heartbeat (default 2 hours).
   - Branch claims end when the branch is deleted or merged. A merged branch named for an item closes it (`how: branch`) unless the branch's commits or PR say `Refs:` for it, which marks partial progress (§12).
-  - Manual claims last until they are released. Moving an item out of In Progress keeps a manual claim and ends a session or branch claim.
+  - Manual claims last until they are released. Moving an item out of In Progress ends its claim, unless the claim is an assignment. The assignee starting it, by `punch start`, a branch push or a Claude session, keeps the assignment and moves the item to In Progress.
   - When a claim ends without a close, the item goes back to the column it was in before.
 
 ### 7.7 GitHub integration and auto-close

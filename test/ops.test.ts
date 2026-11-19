@@ -105,7 +105,7 @@ describe('applyOp', () => {
       const b = board();
       b.run({ op: 'create', title: 'x', status: 'up_next' });
       b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, { user: 'nick', via: 'claude', session: 's1' }, editors);
-      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', since: expect.any(String) });
+      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', assigned: true, since: expect.any(String) });
     });
 
     it('makes a Claude session’s claim, which lapses, a lasting one for that person', () => {
@@ -113,7 +113,7 @@ describe('applyOp', () => {
       b.run({ op: 'create', title: 'x', status: 'up_next' });
       b.run({ op: 'claim', id: 'PL-001' }, { user: 'aaron', via: 'claude', session: 's1' });
       expect(text(b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors))).toBe('Assigned to Aaron Smith');
-      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', since: expect.any(String) });
+      expect(b.items.get('PL-001')!.claim).toEqual({ user: 'aaron', kind: 'manual', assigned: true, since: expect.any(String) });
     });
 
     it('releasing someone else’s claim reads as unassigning them; your own, as releasing it', () => {
@@ -147,7 +147,21 @@ describe('applyOp', () => {
       expect(b.run({ op: 'claim', id: 'PL-001' }, { user: 'aaron', via: 'claude', session: 's1' })).toMatchObject({ ok: true, noop: true });
     });
 
-    it('keeps the assignee when it is moved back out of In Progress; a session’s claim ends', () => {
+    it('keeps an assignment when its assignee starts it by a branch push or with --steal', () => {
+      const b = board();
+      b.run({ op: 'create', title: 'x', status: 'up_next' });
+      b.run({ op: 'create', title: 'y', status: 'up_next' });
+      b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors);
+      b.run({ op: 'claim', id: 'PL-002', user: 'aaron' }, nick, editors);
+      b.run({ op: 'claim', id: 'PL-001', kind: 'branch', ref: 'aaron/pl-001-x' }, { user: 'aaron', via: 'github' });
+      expect(b.items.get('PL-001')!).toMatchObject({ status: 'in_progress', claim: { user: 'aaron', kind: 'manual', assigned: true } });
+      // So the branch ending unmerged doesn't take the assignment with it.
+      expect(b.run({ op: 'branch_end', id: 'PL-001', branch: 'aaron/pl-001-x' }, { user: 'aaron', via: 'github' })).toMatchObject({ ok: true, noop: true });
+      b.run({ op: 'claim', id: 'PL-002', steal: true }, { user: 'aaron', via: 'claude', session: 's1' });
+      expect(b.items.get('PL-002')!).toMatchObject({ status: 'in_progress', claim: { user: 'aaron', kind: 'manual', assigned: true } });
+    });
+
+    it('keeps an assignment when it is moved back out of In Progress; any other claim ends', () => {
       const b = board();
       b.run({ op: 'create', title: 'x', status: 'up_next' });
       b.run({ op: 'claim', id: 'PL-001', user: 'aaron' }, nick, editors);
@@ -156,6 +170,11 @@ describe('applyOp', () => {
       expect(b.items.get('PL-001')!.claim).toMatchObject({ user: 'aaron', kind: 'manual' });
       b.run({ op: 'create', title: 'y', status: 'up_next' });
       b.run({ op: 'claim', id: 'PL-002' }, { user: 'nick', via: 'claude', session: 's1' });
+      b.run({ op: 'move', id: 'PL-002', status: 'up_next' }, nick);
+      expect(b.items.get('PL-002')!.claim).toBeNull();
+      // Dragging a card into In Progress and back out isn't an assignment either (FR-11).
+      b.run({ op: 'move', id: 'PL-002', status: 'in_progress' }, nick);
+      expect(b.items.get('PL-002')!.claim).toMatchObject({ user: 'nick', kind: 'manual' });
       b.run({ op: 'move', id: 'PL-002', status: 'up_next' }, nick);
       expect(b.items.get('PL-002')!.claim).toBeNull();
     });

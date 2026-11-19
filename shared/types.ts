@@ -20,6 +20,12 @@ export interface Claim {
   machine?: string;
   since: string;
   heartbeat_at?: string;
+  /**
+   * Given to this person by name (the sheet's Assignee menu, `punch assign`), rather than taken by
+   * starting the work. Always `manual`. It stays with the item in any column, and the assignee's own
+   * start, branch or session keeps it rather than replacing it (PL-024).
+   */
+  assigned?: true;
 }
 
 /** How long a session claim lasts without a heartbeat from its Claude session (FR-28). */
