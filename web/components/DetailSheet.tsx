@@ -358,11 +358,10 @@ function Md({ text, board }: { text: string; board: BoardInfo }) {
 }
 
 const isImage = (f: File) => (IMAGE_TYPES as readonly string[]).includes(f.type);
-let uploads = 0;
 
 // Body edits carry the version they started from; if someone else saved in between, show their text
 // and keep this draft rather than dropping it (FR-8). Images pasted, dropped or picked are uploaded to
-// the board and land in the draft as Markdown (PL-001); the draft can't be saved until they're in.
+// the board and then land in the draft as Markdown (PL-001); the draft can't be saved until they're in.
 function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo; client: BoardClient; readOnly: boolean }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [base, setBase] = useState(item.body_version);
@@ -373,7 +372,7 @@ function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo;
   const picker = useRef<HTMLInputElement>(null);
   /** Bumped when a draft is dropped, so uploads still running for it change nothing after. */
   const epoch = useRef(0);
-  /** Where the caret goes after an image is put in, since replacing the text moves it to the end. */
+  /** Where the caret goes after images are put in, since setting the text moves it to the end. */
   const caret = useRef<number | null>(null);
 
   /** Drops the draft, and with it any uploads still running for it. */
@@ -399,8 +398,8 @@ function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo;
   };
 
   /**
-   * Uploads the images among `files`. They go in together, in order, at the caret (or at the end),
-   * each shown as uploading until it's in. Returns whether there were any.
+   * Uploads the images among `files`, then puts them in together, in order, where the caret is by
+   * then (or at the end). Save waits for them. Returns whether there were any.
    */
   const attach = (files: File[], where: 'cursor' | 'end' = 'cursor') => {
     const images = files.filter(isImage);
@@ -410,41 +409,33 @@ function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo;
     }
     const big = images.find(f => f.size > MAX_IMAGE_BYTES);
     setUploadError(big ? `${big.name} is over ${MAX_IMAGE_LABEL}.` : null);
-    const jobs = images.filter(f => f.size <= MAX_IMAGE_BYTES).map(file => {
-      const alt = altFor(file.name);
-      return { file, alt, token: `![Uploading ${alt}…](uploading:${++uploads})` };
+    const ok = images.filter(f => f.size <= MAX_IMAGE_BYTES);
+    if (!ok.length) return true;
+    const run = epoch.current;
+    setUploading(n => n + ok.length);
+    void Promise.allSettled(ok.map(f => uploadImage(board, f))).then(results => {
+      if (run !== epoch.current) return;
+      setUploading(n => n - ok.length);
+      const failed = results.find(r => r.status === 'rejected');
+      if (failed) setUploadError((failed.reason as Error).message);
+      const block = results.flatMap((r, i) => (r.status === 'fulfilled' ? [imageMarkdown(altFor(ok[i]!.name), r.value.id)] : [])).join('\n\n');
+      if (block) insert(block, where);
     });
-    if (!jobs.length) return true;
-    const block = jobs.map(j => j.token).join('\n\n');
-    const ta = where === 'cursor' ? textarea.current : null;
+    return true;
+  };
+
+  /** Puts Markdown in the draft on lines of its own, so it shows as a block, with the caret after it. */
+  const insert = (block: string, where: 'cursor' | 'end') => {
+    const ta = where === 'cursor' && document.activeElement === textarea.current ? textarea.current : null;
     const sel = ta ? [ta.selectionStart, ta.selectionEnd] as const : null;
     setDraft(d => {
       const text = d ?? item.body;
       if (!sel) return appendImage(text, block);
-      // On lines of their own, so they show as blocks between paragraphs.
       const before = text.slice(0, sel[0]), after = text.slice(sel[1]);
       const lead = before && !before.endsWith('\n') ? '\n\n' : '';
       caret.current = before.length + lead.length + block.length;
       return `${before}${lead}${block}${after && !after.startsWith('\n') ? '\n\n' : ''}${after}`;
     });
-    const run = epoch.current;
-    setUploading(n => n + jobs.length);
-    for (const j of jobs) {
-      uploadImage(board, j.file).then(
-        att => {
-          if (run !== epoch.current) return;
-          const md = imageMarkdown(j.alt, att.id);
-          // If the placeholder was edited away meanwhile, the image still goes in, at the end.
-          setDraft(d => (d === null ? d : d.includes(j.token) ? d.replace(j.token, md) : appendImage(d, md)));
-        },
-        (e: Error) => {
-          if (run !== epoch.current) return;
-          setDraft(d => d?.replace(j.token, '') ?? d);
-          setUploadError(e.message);
-        },
-      ).finally(() => run === epoch.current && setUploading(n => n - 1));
-    }
-    return true;
   };
   const filesIn = (dt: DataTransfer | null) => [...(dt?.files ?? [])];
 
