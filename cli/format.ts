@@ -108,9 +108,11 @@ export function formatCompact(snap: Snapshot, viewer: Viewer = {}): string {
     if (list.length > max) out.push(`- … ${list.length - max} more (${more})`);
   };
   section('In progress', inProgress, 20, i => `${t(i)} [${holder(i, viewer) ?? 'unclaimed'}]`, 'punch list --status in_progress');
-  section('Up next (top first)', upNext, 15, i => t(i) + (blockedWhy(i, items) ? ' [blocked]' : ''), 'punch list --status up_next');
+  // Assigned but not started (PL-024): Claude must see whose it is before it starts one.
+  const assignee = (i: Item) => (i.claim ? ` [assigned ${holder(i, viewer)}]` : '');
+  section('Up next (top first)', upNext, 15, i => t(i) + assignee(i) + (blockedWhy(i, items) ? ' [blocked]' : ''), 'punch list --status up_next');
   section('Blocked', blocked, 10, i => `${i.id}: ${clip(blockedWhy(i, items)!, 100)}`, 'punch list');
-  section('Backlog (top first)', backlog, 10, t, 'punch list --status backlog');
+  section('Backlog (top first)', backlog, 10, i => t(i) + assignee(i), 'punch list --status backlog');
   return out.join('\n');
 }
 
@@ -150,7 +152,8 @@ export function formatShow(it: Item, items: ReadonlyMap<string, Item>, history: 
 export function formatMine(boards: MyWorkBoard[]): string {
   const out: string[] = [];
   for (const b of boards) {
-    const items = new Map([...b.held, ...b.upNext, ...b.blockedOnMe].map(i => [i.id, i]));
+    const assigned = b.assigned ?? [];
+    const items = new Map([...b.held, ...assigned, ...b.upNext, ...b.blockedOnMe].map(i => [i.id, i]));
     out.push(c.bold(`${b.board.owner}/${b.board.repo}`));
     const group = (title: string, list: Item[]) => {
       if (!list.length) return;
@@ -158,9 +161,10 @@ export function formatMine(boards: MyWorkBoard[]): string {
       for (const it of list) out.push(`    ${line(it, items, 80)}`);
     };
     group('In progress', b.held);
+    group('Assigned to you', assigned);
     group('Blocked on you', b.blockedOnMe);
-    group('Up next', b.upNext);
-    if (!b.held.length && !b.blockedOnMe.length && !b.upNext.length) out.push(c.dim('  nothing here'));
+    group('Up next', b.upNext.filter(i => !assigned.some(a => a.id === i.id)));
+    if (!b.held.length && !assigned.length && !b.blockedOnMe.length && !b.upNext.length) out.push(c.dim('  nothing here'));
     out.push('');
   }
   return out.join('\n').trimEnd() || 'No boards.';

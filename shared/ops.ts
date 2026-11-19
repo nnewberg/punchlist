@@ -129,7 +129,8 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
       it.rank = op.status === 'done' ? it.rank : rankFor(items.values(), op.status, beforeId, it.id);
       setStatus(it, op.status, now);
       if (op.status === 'in_progress' && !it.claim) it.claim = { user, kind: 'manual', since: now }; // FR-11
-      if ((op.status === 'backlog' || op.status === 'up_next') && from === 'in_progress') it.claim = null;
+      // Moved back out of In Progress, the work has stopped and its claim ends, unless it was an assignment (PL-024).
+      if ((op.status === 'backlog' || op.status === 'up_next') && from === 'in_progress' && !it.claim?.assigned) it.claim = null;
       if (op.status === 'dropped') it.claim = null;
       meta = {
         text:
@@ -172,37 +173,47 @@ export function applyOp(items: ReadonlyMap<string, Item>, op: Op, ctx: ApplyCtx)
     case 'claim': {
       if (it.status === 'done' || it.status === 'dropped') return fail('invalid', 'Reopen the item before claiming it');
       const target = claimFor(op, actor);
-      // Assigning someone else is a hand-made claim on their behalf, never tied to the actor's session.
+      // Naming who gets it (the sheet's Assignee menu, `punch assign`), yourself included, assigns it: a
+      // hand-made claim, never tied to the actor's session, that leaves the item in its column (PL-024).
+      // Starting it (`punch start`, a branch push) claims it for the actor and moves it to In Progress.
+      const assign = op.user !== undefined;
       const assigning = target !== user;
       if (assigning && !ctx.editors?.has(target)) {
         return fail('invalid', `${target} can’t be assigned ${it.id}: only people who can edit this board can, once they’ve signed in to Punchlist.`);
       }
       const nameOf = (login: string) => ctx.editors?.get(login) || person(login).name;
-      const kind = assigning ? 'manual' : (op.kind ?? (actor.session ? 'session' : 'manual'));
-      const ref = assigning ? undefined : (op.ref ?? actor.session);
+      const kind = assign ? 'manual' : (op.kind ?? (actor.session ? 'session' : 'manual'));
+      const ref = assign ? undefined : (op.ref ?? actor.session);
       const held = it.claim;
-      // Assigning whoever has it changes nothing, except that a Claude session's claim, which lapses, becomes a lasting one.
-      if (assigning && held?.user === target && held.kind !== 'session') return { ok: true, noop: true, item: cur };
+      // Assigning it to whoever it's already assigned to changes nothing. Anything else they hold, a
+      // Claude session's claim that lapses, say, becomes a lasting assignment.
+      if (assign && held?.user === target && held.assigned) return { ok: true, noop: true, item: cur };
       // A claim you hold yourself can be handed to someone else; a third person's needs `steal` (FR-27).
       if (held && held.user !== target && held.user !== user && !op.steal) {
         return { ok: false, error: { code: 'claimed', message: `${nameOf(held.user)} already has ${it.id}`, holder: held } };
       }
-      if (held && held.user === target && !op.steal) {
-        if (held.kind === kind && held.ref === ref) return { ok: true, noop: true, item: cur };
-        // A branch or a hand-made claim outlives any one session, so a session doesn't replace it.
-        if (kind === 'session' && held.kind !== 'session') return { ok: true, noop: true, item: cur };
-        // Two of your own Claude sessions working on one item is duplicated work too (FR-27).
-        if (kind === 'session') return { ok: false, error: { code: 'claimed', message: `Your other Claude session has ${it.id}`, holder: held } };
+      // Starting it can keep the claim it has, and only move the item: an assignment, when its assignee
+      // starts it by any means, `--steal` included; the same claim again; or a session's claim on top of
+      // your branch or hand-made one, which outlives any one session.
+      let keep = false;
+      if (!assign && held?.user === target) {
+        if (held.assigned) keep = true;
+        else if (!op.steal) {
+          // Two of your own Claude sessions working on one item is duplicated work too (FR-27).
+          if (kind === 'session' && held.kind === 'session' && held.ref !== ref) return { ok: false, error: { code: 'claimed', message: `Your other Claude session has ${it.id}`, holder: held } };
+          keep = (held.kind === kind && held.ref === ref) || (kind === 'session' && held.kind !== 'session');
+        }
       }
-      const prev = held && held.user !== target ? held.user : null;
-      it.claim = { user: target, kind, ...(ref ? { ref } : {}), since: now };
-      if (it.status !== 'in_progress') {
+      if (keep && it.status === 'in_progress') return { ok: true, noop: true, item: cur };
+      const prev = !keep && held && held.user !== target ? held.user : null;
+      if (!keep) it.claim = { user: target, kind, ...(ref ? { ref } : {}), ...(assign ? { assigned: true as const } : {}), since: now };
+      if (!assign && it.status !== 'in_progress') {
         it.rank = rankFor(items.values(), 'in_progress', null, it.id);
         setStatus(it, 'in_progress', now);
       }
       meta = {
         text:
-          assigning ? (prev && prev !== user ? `Reassigned from ${nameOf(prev)} to ${nameOf(target)}` : `Assigned to ${nameOf(target)}`)
+          assign ? (prev && prev !== user ? `Reassigned from ${nameOf(prev)} to ${nameOf(target)}` : `Assigned to ${nameOf(target)}`)
           : prev ? `Took over from ${nameOf(prev)}`
           : 'Started',
       };

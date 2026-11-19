@@ -276,8 +276,8 @@ function Assignee({ item }: { item: Item }) {
   );
 }
 
-// Picking yourself claims it, picking someone else assigns it to them, and Unassigned releases it.
-// Either of the first two takes it from whoever has it now, and the log records it (FR-27).
+// Picking someone, yourself included, assigns it to them and leaves it in its column (PL-024);
+// Unassigned releases it. Picking takes it from whoever has it now, and the log records it (FR-27).
 function AssigneePicker({ item, editors, me, send }: { item: Item; editors: string[]; me: string; send: (op: Op) => unknown }) {
   const people = [me, ...editors.filter(l => l !== me).sort((a, b) => person(a).name.localeCompare(person(b).name))];
   const m = usePillMenu(36 * (people.length + 1) + 24);
@@ -287,7 +287,7 @@ function AssigneePicker({ item, editors, me, send }: { item: Item; editors: stri
     // Picking whoever has it changes nothing, except that it makes a Claude session's claim, which lapses, a lasting one.
     if (login === (holder ?? null) && item.claim?.kind !== 'session') return;
     if (!login) send({ op: 'release', id: item.id });
-    else send({ op: 'claim', id: item.id, ...(login !== me ? { user: login } : {}), ...(holder ? { steal: true } : {}) });
+    else send({ op: 'claim', id: item.id, user: login, ...(holder ? { steal: true } : {}) });
   };
   return (
     <span ref={m.ref} style={{ position: 'relative' }}>
