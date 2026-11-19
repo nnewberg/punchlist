@@ -66,6 +66,7 @@ function AccountMenu({ me }: { me: string }) {
           <div className="menu-sep" />
           <button className="menu-item" onClick={() => (close(), nav('/me'))}>My work</button>
           {acct?.installUrl && <a className="menu-item" href={acct.installUrl}>Add a repo…</a>}
+          <button className="menu-item" onClick={() => (close(), nav('/setup'))}>Set up Claude Code…</button>
           <div className="menu-sep" />
           <button className="menu-item" onClick={() => void signOut()}>Sign out</button>
         </div>

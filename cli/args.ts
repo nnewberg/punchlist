@@ -57,6 +57,7 @@ export const COMMAND_FLAGS: Record<string, string[]> = {
   export: ['out'],
   import: ['yes'],
   init: ['yes'],
+  setup: ['check', 'link', 'wait-board'],
   login: ['dev', 'start', 'finish'],
   logout: [],
   whoami: [],

@@ -198,6 +198,8 @@ export interface Me {
   people: Record<string, PersonInfo>;
   /** Where to install the GitHub App on another repo, if GitHub is set up. */
   installUrl: string | null;
+  /** The GitHub accounts this Punchlist makes boards for (ALLOWED_OWNERS), so setup can say why a repo has none. */
+  allowedOwners: string[];
   /** Dev identity stub in use (DEV_MODE). */
   dev: boolean;
 }

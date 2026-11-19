@@ -70,9 +70,9 @@ describe('session-start', () => {
     expect(calls[1]).toMatchObject({ body: { action: 'heartbeat' }, session: 'sess-1' });
   });
 
-  it('says once how to sign in when punch is not signed in', async () => {
+  it('has Claude offer to sign in when punch is not signed in', async () => {
     const out = await runHook('session-start', { session_id: 's', cwd: repo }, { url: URL_ });
-    expect(out).toMatch(/isn't signed in.*\/punch login/);
+    expect(out).toMatch(/isn't signed in.*Offer to sign them in now.*punch login --start.*punch login --finish/);
     expect(calls).toEqual([]);
   });
 
@@ -80,6 +80,14 @@ describe('session-start', () => {
     await signIn();
     status = 404;
     expect(await runHook('session-start', { session_id: 's', cwd: repo }, { url: URL_ })).toMatch(/no board for nnewberg\/punchlist-sandbox/);
+  });
+
+  it('points at /punch setup when the repo turns Punchlist on but has no board', async () => {
+    await signIn();
+    status = 404;
+    mkdirSync(join(repo, '.claude'));
+    writeFileSync(join(repo, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'punchlist@punchlist': true } }));
+    expect(await runHook('session-start', { session_id: 's', cwd: repo }, { url: URL_ })).toMatch(/turns Punchlist on.*no board for nnewberg\/punchlist-sandbox.*\/punch setup/);
   });
 
   it('says nothing outside a GitHub repo', async () => {

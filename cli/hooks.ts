@@ -4,7 +4,7 @@ import type { Item } from '../shared/types';
 import { ApiError, boardPath, Client, NetworkError, readBoard } from './api';
 import { configDir, getToken, loadConfig } from './config';
 import { formatCompact } from './format';
-import { boardFromCwd, type BoardRef } from './repo';
+import { boardFromCwd, repoRoot, type BoardRef } from './repo';
 
 // `punch hook <event>`: what the Claude Code plugin's hooks run (FR-24). Claude Code passes the
 // session as JSON on stdin. A hook never fails loudly: a broken board must not break a Claude session.
@@ -42,6 +42,20 @@ function rules(env: HookEnv): string | null {
   }
 }
 
+const SIGN_IN = 'Offer to sign them in now: run `punch login --start`, show them the code and the GitHub link it prints, then run `punch login --finish`.';
+
+/** Whether the repo's committed Claude Code settings turn Punchlist on: then someone meant it to have a board. */
+function repoWantsPunchlist(cwd?: string): boolean {
+  const root = repoRoot(cwd);
+  if (!root) return false;
+  try {
+    const s = JSON.parse(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')) as { enabledPlugins?: Record<string, unknown> };
+    return s.enabledPlugins?.['punchlist@punchlist'] === true;
+  } catch {
+    return false;
+  }
+}
+
 const cleanSession = (s: string | undefined) => s?.replace(/[^\w.:-]/g, '').slice(0, 64) || undefined;
 const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
@@ -71,14 +85,18 @@ export async function sessionStart(input: HookInput, env: HookEnv): Promise<stri
   const b = boardFromCwd(input.cwd);
   if (!b) return ''; // not a GitHub repo: nothing to say
   const token = await getToken(env.url);
-  if (!token) return `Punchlist: ${b.owner}/${b.repo} may have a shared TODO board, but punch isn't signed in on this machine. Tell the user once that \`/punch login\` signs in.`;
+  if (!token) return `Punchlist: ${b.owner}/${b.repo} may have a shared TODO board, but punch isn't signed in on this machine. ${SIGN_IN}`;
   const client = new Client({ url: env.url, token, session, timeoutMs: HOOK_TIMEOUT_MS });
   let read;
   try {
     read = await readBoard(client, b);
   } catch (e) {
-    if (e instanceof ApiError && e.status === 404) return `Punchlist: there's no board for ${b.owner}/${b.repo} that ${loadConfig().user ?? 'you'} can see, so ignore the board in this repo.`;
-    if (e instanceof ApiError && e.status === 401) return `Punchlist: punch's sign-in on this machine has expired or was revoked. Tell the user once that \`/punch login\` signs in again.`;
+    if (e instanceof ApiError && e.status === 404) {
+      const who = loadConfig().user ?? 'you';
+      if (repoWantsPunchlist(input.cwd)) return `Punchlist: this repo turns Punchlist on, but there's no board for ${b.owner}/${b.repo} that ${who} can see. Mention it to the user once: \`/punch setup\` says why and what to do.`;
+      return `Punchlist: there's no board for ${b.owner}/${b.repo} that ${who} can see, so ignore the board in this repo.`;
+    }
+    if (e instanceof ApiError && e.status === 401) return `Punchlist: punch's sign-in on this machine has expired or was revoked. ${SIGN_IN}`;
     return `Punchlist: couldn't load the board for ${b.owner}/${b.repo} (${(e as Error).message}).`;
   }
   let held: Item[] | null = null;

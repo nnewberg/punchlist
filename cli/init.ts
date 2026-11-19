@@ -37,13 +37,11 @@ export function applyInit(plan: InitPlan) {
 }
 
 /** What a repo commits to `.claude/settings.json` so Claude Code offers teammates the plugin (FR-25a). */
-export function pluginSettings(): string {
-  return JSON.stringify(
-    {
-      extraKnownMarketplaces: { punchlist: { source: { source: 'github', repo: 'nnewberg/punchlist' }, autoUpdate: true } },
-      enabledPlugins: { 'punchlist@punchlist': true },
-    },
-    null,
-    2,
-  );
+export function pluginSettingsObject() {
+  return {
+    extraKnownMarketplaces: { punchlist: { source: { source: 'github', repo: 'nnewberg/punchlist' }, autoUpdate: true } },
+    enabledPlugins: { 'punchlist@punchlist': true } as Record<string, boolean>,
+  };
 }
+
+export const pluginSettings = (): string => JSON.stringify(pluginSettingsObject(), null, 2);

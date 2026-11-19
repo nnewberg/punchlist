@@ -1,7 +1,7 @@
 ---
 name: punch
-description: Show or change this repo's shared Punchlist board. Usage - /punch, /punch add TEXT, /punch start ID, /punch done ID [note], /punch block ID REASON, /punch login
-argument-hint: "[add TEXT | start ID | done ID [note] | block ID REASON | login]"
+description: Show or change this repo's shared Punchlist board. Usage - /punch, /punch add TEXT, /punch start ID, /punch done ID [note], /punch block ID REASON, /punch login, /punch setup
+argument-hint: "[add TEXT | start ID | done ID [note] | block ID REASON | login | setup]"
 allowed-tools: Bash(punch *)
 disable-model-invocation: true
 ---
@@ -16,6 +16,7 @@ The user typed `/punch $ARGUMENTS`. Do the matching action below with the `punch
 | `done <ID> [note]` | Run `punch close <ID> -m "<note>"` (leave off `-m` if there's no note). This closes it by hand, which they've asked for. |
 | `block <ID> <reason>` | Run `punch block <ID> "<reason>"`. |
 | `login` | Run `punch login --start`. It opens a GitHub page in their browser; tell them so, with the code to enter there and the URL in case no page opened. Then run `punch login --finish` with a 10-minute Bash timeout, and say who is now signed in. |
+| `setup` | Run `punch setup`. It checks everything (sign-in, the board, the plugin, `.claude/settings.json`, CLAUDE.md), fixes what it safely can, and prints one `Next:` step. Do that step (sign-in works as in `login` above; installing the GitHub App is a link for the user to open), then run `punch setup` again, until it prints "Setup complete". Show its final output. For each "Also worth doing" line, ask the user before doing it: committing and opening a PR, `punch setup --link`, or an import. |
 | anything else | Pass it straight through as `punch <their words>`. For example, `/punch release PS-4` runs `punch release PS-4`. |
 
 Commands print a plain-text summary, and you can show it as is. On an error, say what it means in a sentence.
