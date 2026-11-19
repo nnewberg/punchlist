@@ -51,6 +51,10 @@ export interface SetupEnv {
   waitBoard?: boolean;
   waitMs?: number;
   pollMs?: number;
+  /** How often --wait-board says it's still waiting. */
+  progressMs?: number;
+  /** Where --wait-board's progress lines go while it waits (the report itself comes at the end). */
+  progress?: (line: string) => void;
   /** Runs `claude` with these args in `cwd`; null when Claude Code's CLI isn't installed. */
   claude?: (args: string[], cwd: string) => string | null;
   env?: NodeJS.ProcessEnv;
@@ -103,6 +107,25 @@ const real = (p: string) => {
   }
 };
 const sameOwner = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/**
+ * A board the user can see for a repo of the same name under another owner. That's what a repo moved to
+ * another account or org looks like from a clone made before the move: GitHub keeps forwarding the old
+ * address, so git works and nothing looks wrong, but the board is under the repo's new name.
+ */
+function movedBoard(me: Me, b: BoardRef) {
+  return me.boards.find(x => sameOwner(x.repo, b.repo) && !sameOwner(x.owner, b.owner));
+}
+
+/** `origin`'s URL with owner/repo swapped for `to`, keeping its form (SSH or HTTPS). */
+export function movedRemote(remote: string, from: BoardRef, to: BoardRef): string {
+  const at = remote.toLowerCase().lastIndexOf(`${from.owner}/${from.repo}`.toLowerCase());
+  if (at < 0) return `https://github.com/${to.owner}/${to.repo}.git`;
+  return remote.slice(0, at) + `${to.owner}/${to.repo}` + remote.slice(at + from.owner.length + 1 + from.repo.length);
+}
+
+const WAIT_MS = 3 * 60_000;
+const minutes = (ms: number) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`);
 
 // ---- .claude/settings.json ----
 
@@ -294,13 +317,24 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
   else {
     const find = (m: Me) => m.boards.find(x => sameOwner(x.owner, b.owner) && sameOwner(x.repo, b.repo));
     let entry = find(me);
-    if (!entry && env.waitBoard) {
-      const until = Date.now() + (env.waitMs ?? 10 * 60_000);
+    // Waiting can't help when the board is under the repo's new name: say so straight away (below).
+    if (!entry && env.waitBoard && !movedBoard(me, b)) {
+      const waitMs = env.waitMs ?? WAIT_MS;
+      const start = Date.now();
+      const until = start + waitMs;
+      const say = env.progress ?? (() => {});
+      let said = start;
+      say(`Waiting up to ${minutes(waitMs)} for the board for ${b.owner}/${b.repo} to appear…`);
       while (!entry && Date.now() < until) {
         await new Promise(r => setTimeout(r, env.pollMs ?? 3_000));
+        if (Date.now() - said >= (env.progressMs ?? 30_000)) {
+          said = Date.now();
+          say(`Still no board for ${b.owner}/${b.repo} after ${minutes(said - start)}; checking for ${minutes(Math.max(0, until - said))} more.`);
+        }
         try {
           me = await client.request<Me>('GET', '/v1/me'); // also has the server re-check installs
           entry = find(me);
+          if (!entry && movedBoard(me, b)) break;
         } catch (e) {
           // A dropped connection while they're on GitHub: keep waiting. A revoked sign-in won't fix itself.
           if (e instanceof ApiError && e.status === 401) break;
@@ -309,21 +343,30 @@ export async function runSetup(env: SetupEnv): Promise<SetupReport> {
       }
     }
     const allowed = (me as Me & { allowedOwners?: string[] }).allowedOwners; // newer servers say who they serve
+    const moved = entry ? undefined : movedBoard(me, b);
     if (entry) {
       snapshot = (await readBoard(client, b)).snapshot;
       add({ id: 'board', state: 'ok', summary: `Board ${entry.prefix} at ${env.url}/${b.owner}/${b.repo}${entry.role === 'view' ? ' (you can only view it)' : ''}` });
+    } else if (moved) {
+      const url = movedRemote(git(['remote', 'get-url', 'origin'], env.cwd) ?? '', b, moved);
+      add({
+        id: 'board',
+        state: 'action',
+        summary: `origin says ${b.owner}/${b.repo}, but the board is ${moved.owner}/${moved.repo}`,
+        next: `This clone's origin is ${b.owner}/${b.repo}, and there's no board there, but there is one for ${moved.owner}/${moved.repo} (${moved.prefix}). That usually means the repo moved on GitHub after this clone was made: GitHub keeps forwarding the old address, so git still works, but Punchlist goes by the repo's current name. If ${moved.owner}/${moved.repo} is this repo, ask the user, then point origin at it with \`git remote set-url origin ${url}\` and run \`punch setup\` again. The GitHub App doesn't need installing again.`,
+      });
     } else if (allowed && !allowed.some(a => sameOwner(a, b.owner))) {
       add({ id: 'board', state: 'blocked', summary: `Punchlist doesn't serve repos owned by ${b.owner}`, next: `This Punchlist only makes boards for repos owned by ${allowed.join(' or ')}, so ${b.owner}/${b.repo} can't have one yet. Whoever runs this Punchlist can add ${b.owner} to ALLOWED_OWNERS.` });
     } else if (!me.installUrl) {
       add({ id: 'board', state: 'blocked', summary: `No board for ${b.owner}/${b.repo}`, next: "This Punchlist's GitHub App isn't set up yet, so it can't make boards. Whoever runs it needs to finish its setup." });
     } else if (env.waitBoard) {
-      add({ id: 'board', state: 'blocked', summary: `The board for ${b.owner}/${b.repo} didn't appear`, next: `Still no board for ${b.owner}/${b.repo} that ${me.user} can see. Check that the Punchlist Board App is installed on that repo (${me.installUrl}) and that ${me.user} can read the repo on GitHub, then run \`punch setup --wait-board\` again.` });
+      add({ id: 'board', state: 'blocked', summary: `The board for ${b.owner}/${b.repo} didn't appear`, next: `Still no board for ${b.owner}/${b.repo} that ${me.user} can see. Check that the Punchlist Board App is installed on that repo (${me.installUrl}) and that ${me.user} can read the repo on GitHub, and that \`git remote get-url origin\` is the repo's current address (a repo that moved keeps forwarding its old one). Then run \`punch setup --wait-board\` again.` });
     } else {
       add({
         id: 'board',
         state: 'action',
         summary: `No board for ${b.owner}/${b.repo} that ${me.user} can see`,
-        next: `Either the Punchlist GitHub App isn't installed on ${b.owner}/${b.repo}, or ${me.user} can't see it. If the user can manage that repo on GitHub, have them install the App on it: ${me.installUrl} (choose ${b.owner}, then ${b.repo}). Then run \`punch setup --wait-board\`, which waits for the board to appear.`,
+        next: `Either the Punchlist GitHub App isn't installed on ${b.owner}/${b.repo}, or ${me.user} can't see it. If the user can manage that repo on GitHub, have them install the App on it: ${me.installUrl} (choose ${b.owner}, then ${b.repo}). Then run \`punch setup --wait-board\` with a Bash timeout of 4 minutes (240000 ms): it waits up to ${minutes(WAIT_MS)} for the board to appear, printing a line every 30 s.`,
       });
     }
   }
