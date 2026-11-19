@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import { altFor, appendImage, IMAGE_TYPES, imageMarkdown, MAX_IMAGE_BYTES, MAX_IMAGE_LABEL } from '../../shared/attachments';
 import { person } from '../../shared/config';
@@ -371,49 +371,78 @@ function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo;
   const [uploadError, setUploadError] = useState<string | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  /** Bumped when a draft is dropped, so uploads still running for it change nothing after. */
+  const epoch = useRef(0);
+  /** Where the caret goes after an image is put in, since replacing the text moves it to the end. */
+  const caret = useRef<number | null>(null);
 
-  useEffect(() => {
+  /** Drops the draft, and with it any uploads still running for it. */
+  const discard = () => {
+    epoch.current += 1;
+    setUploading(0);
     setDraft(null);
     setConflict(null);
     setUploadError(null);
-  }, [item.id]);
+  };
+
+  useEffect(discard, [item.id]);
+
+  useLayoutEffect(() => {
+    if (caret.current === null || !textarea.current) return;
+    textarea.current.setSelectionRange(caret.current, caret.current);
+    caret.current = null;
+  }, [draft]);
 
   const start = () => {
     setDraft(item.body);
     setBase(item.body_version);
   };
 
-  /** Uploads the images among `files`, each shown in the draft as uploading until it's in. Returns whether there were any. */
+  /**
+   * Uploads the images among `files`. They go in together, in order, at the caret (or at the end),
+   * each shown as uploading until it's in. Returns whether there were any.
+   */
   const attach = (files: File[], where: 'cursor' | 'end' = 'cursor') => {
     const images = files.filter(isImage);
     if (!images.length) {
       if (files.length) setUploadError('Only PNG, JPEG, GIF and WebP images can be attached.');
       return false;
     }
-    setUploadError(null);
-    const ta = textarea.current;
-    for (const file of images) {
+    const big = images.find(f => f.size > MAX_IMAGE_BYTES);
+    setUploadError(big ? `${big.name} is over ${MAX_IMAGE_LABEL}.` : null);
+    const jobs = images.filter(f => f.size <= MAX_IMAGE_BYTES).map(file => {
       const alt = altFor(file.name);
-      if (file.size > MAX_IMAGE_BYTES) {
-        setUploadError(`${file.name} is over ${MAX_IMAGE_LABEL}.`);
-        continue;
-      }
-      const token = `![Uploading ${alt}…](uploading:${++uploads})`;
-      setDraft(d => {
-        const text = d ?? item.body;
-        if (where === 'end' || !ta) return appendImage(text, token);
-        // On a line of its own, so it shows as a block between paragraphs.
-        const before = text.slice(0, ta.selectionStart), after = text.slice(ta.selectionEnd);
-        return `${before}${before && !before.endsWith('\n') ? '\n\n' : ''}${token}${after && !after.startsWith('\n') ? '\n\n' : ''}${after}`;
-      });
-      setUploading(n => n + 1);
-      uploadImage(board, file).then(
-        att => setDraft(d => d?.replace(token, imageMarkdown(alt, att.id)) ?? d),
+      return { file, alt, token: `![Uploading ${alt}…](uploading:${++uploads})` };
+    });
+    if (!jobs.length) return true;
+    const block = jobs.map(j => j.token).join('\n\n');
+    const ta = where === 'cursor' ? textarea.current : null;
+    const sel = ta ? [ta.selectionStart, ta.selectionEnd] as const : null;
+    setDraft(d => {
+      const text = d ?? item.body;
+      if (!sel) return appendImage(text, block);
+      // On lines of their own, so they show as blocks between paragraphs.
+      const before = text.slice(0, sel[0]), after = text.slice(sel[1]);
+      const lead = before && !before.endsWith('\n') ? '\n\n' : '';
+      caret.current = before.length + lead.length + block.length;
+      return `${before}${lead}${block}${after && !after.startsWith('\n') ? '\n\n' : ''}${after}`;
+    });
+    const run = epoch.current;
+    setUploading(n => n + jobs.length);
+    for (const j of jobs) {
+      uploadImage(board, j.file).then(
+        att => {
+          if (run !== epoch.current) return;
+          const md = imageMarkdown(j.alt, att.id);
+          // If the placeholder was edited away meanwhile, the image still goes in, at the end.
+          setDraft(d => (d === null ? d : d.includes(j.token) ? d.replace(j.token, md) : appendImage(d, md)));
+        },
         (e: Error) => {
-          setDraft(d => d?.replace(token, '') ?? d);
+          if (run !== epoch.current) return;
+          setDraft(d => d?.replace(j.token, '') ?? d);
           setUploadError(e.message);
         },
-      ).finally(() => setUploading(n => n - 1));
+      ).finally(() => run === epoch.current && setUploading(n => n - 1));
     }
     return true;
   };
@@ -469,8 +498,10 @@ function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo;
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onPaste={e => {
-          // A screenshot pastes as an image alone; something copied with text (a document, a web page) pastes as its text.
-          if (e.clipboardData.types.includes('text/plain')) return;
+          // Rich text copied from a document or page (plain and HTML both) pastes as its text, even with
+          // images in it. Anything else with an image in it, a screenshot or a file, attaches the image.
+          const types = e.clipboardData.types;
+          if (types.includes('text/plain') && types.includes('text/html')) return;
           if (attach(filesIn(e.clipboardData))) e.preventDefault();
         }}
         onDragOver={e => e.dataTransfer.types.includes('Files') && e.preventDefault()}
@@ -483,8 +514,7 @@ function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo;
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save();
           if (e.key === 'Escape') {
             e.stopPropagation();
-            setDraft(null);
-            setConflict(null);
+            discard();
           }
         }}
         placeholder="Markdown — one line or a full spec. Paste or drop images in."
@@ -492,7 +522,7 @@ function Body({ item, board, client, readOnly }: { item: Item; board: BoardInfo;
       {uploadError && <div className="upload-error">{uploadError}<button className="btn-link" onClick={() => setUploadError(null)}>Dismiss</button></div>}
       <div className="row">
         <button className="btn btn-accent" disabled={!!uploading} onClick={() => save()}>{uploading ? 'Uploading…' : 'Save'}</button>
-        <button className="btn" onClick={() => (setDraft(null), setConflict(null), setUploadError(null))}>Cancel</button>
+        <button className="btn" onClick={discard}>Cancel</button>
         <button className="btn" onClick={() => picker.current?.click()}>Attach image</button>
         <input
           ref={picker}

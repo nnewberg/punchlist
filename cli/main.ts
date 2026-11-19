@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
@@ -8,11 +7,11 @@ import { resolveId, STATUS_LABEL } from '../shared/ops';
 import { checkImport } from '../shared/import';
 import type { BoardEvent, Column, ImportFile, Me, MyWorkBoard, Op } from '../shared/types';
 import { ApiError, boardPath, Client, flush, NetworkError, readBoard, write, type ApplyResult, type FlushReport } from './api';
-import { baseUrl, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
+import { baseUrl, cacheDir, configDir, DEFAULT_URL, deleteToken, getToken, loadConfig, machine, readJson, saveConfig, setToken, writeJson } from './config';
 import { c, formatCompact, formatImportPlan, formatList, formatMine, formatShow } from './format';
 import { assignedElse, assignOp } from './assign';
 import { attachOp, checkImageFile, imagePath } from './attach';
-import { attachmentIds } from '../shared/attachments';
+import { attachmentIds, MAX_IMAGE_BYTES, MAX_IMAGE_LABEL } from '../shared/attachments';
 import { bodyArg, editOp } from './edit';
 import { applyInit, planInit, pluginSettings } from './init';
 import { readHookInput, runHook } from './hooks';
@@ -337,8 +336,11 @@ async function run() {
       const images = files.map(path => {
         let bytes: Uint8Array<ArrayBuffer>;
         try {
+          // Refuse a big file by its size, before reading all of it.
+          if (statSync(path).size > MAX_IMAGE_BYTES) throw new UsageError(`${path}: Images can be up to ${MAX_IMAGE_LABEL}.`);
           bytes = new Uint8Array(readFileSync(path));
         } catch (e) {
+          if (e instanceof UsageError) throw e;
           throw new UsageError(`Can't read ${path}: ${(e as Error).message}`);
         }
         return { path, bytes, type: checkImageFile(path, bytes) };
@@ -350,8 +352,7 @@ async function run() {
       if (offlineSince) throw new Error('Offline: images can only be attached while the board can be reached.');
       const it = resolveId(new Map(snapshot.items.map(i => [i.id, i])), ref);
       if (!it) throw new Error(`No item ${ref} on ${b.owner}/${b.repo}.`);
-      const uploads = [];
-      for (const img of images) uploads.push({ path: img.path, id: (await api.upload(b, img.bytes, img.type)).id });
+      const uploads = await Promise.all(images.map(async img => ({ path: img.path, id: (await api.upload(b, img.bytes, img.type)).id })));
       const op = attachOp(it, uploads);
       if (!op) return o.json ? printJson({ ok: true, noop: true, item: it }) : print(c.dim(`${it.id} already has ${files.length === 1 ? 'that image' : 'those images'}: nothing changed.`));
       const n = uploads.length;
@@ -368,19 +369,16 @@ async function run() {
       if (!it) throw new Error(`No item ${ref} on ${b.owner}/${b.repo}.`);
       const ids = attachmentIds(it.body);
       if (!ids.length) return o.json ? printJson({ images: [] }) : print(c.dim(`${it.id} has no images.`));
-      const dir = o.out ?? join(tmpdir(), 'punchlist', b.owner, b.repo);
+      // This person's own cache, not a shared temp directory another user could plant links in.
+      const dir = o.out ?? join(cacheDir(), 'images', b.owner.toLowerCase(), b.repo.toLowerCase());
       mkdirSync(dir, { recursive: true });
-      const saved: { id: string; path: string | null }[] = [];
-      for (const [i, id] of ids.entries()) {
+      const saved = await Promise.all(ids.map(async (id, i) => {
         const file = await api.download(b, id);
-        if (!file) {
-          saved.push({ id, path: null });
-          continue;
-        }
+        if (!file) return { id, path: null };
         const path = imagePath(dir, it.id, i + 1, file.type);
         writeFileSync(path, file.bytes);
-        saved.push({ id, path });
-      }
+        return { id, path };
+      }));
       if (o.json) return printJson({ images: saved });
       for (const s of saved) print(s.path ?? c.yellow(`attachment:${s.id} isn't on this board`));
       return;
